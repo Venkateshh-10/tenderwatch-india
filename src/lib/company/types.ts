@@ -1,0 +1,23 @@
+export type CompanyDna = {
+  companyName: string;
+  industry: string;
+  capabilities: string[];
+  technologies: string[];
+  headquarters: string;
+  preferredStates: string[];
+  companyAgeYears: number;
+  annualTurnoverInr: number;
+  employeeCount: number;
+  certifications: string[];
+  registrations: string[];
+  msmeStatus: boolean;
+  udyamRegistered: boolean;
+  gstRegistered: boolean;
+  gemRegistered: boolean;
+  pastProjectCategories: string[];
+  preferredDepartments: string[];
+  minimumContractValue: number | null;
+  maximumContractValue: number | null;
+  maximumEmd: number | null;
+  excludedCategories: string[];
+};

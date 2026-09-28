@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model CompanyProfile {
+  id                        String   @id
+  companyName               String
+  industry                  String
+  capabilitiesJson          String
+  technologiesJson          String
+  headquarters              String
+  preferredStatesJson       String
+  companyAgeYears           Int
+  annualTurnoverInr         Float
+  employeeCount             Int
+  certificationsJson        String
+  registrationsJson         String
+  msmeStatus                Boolean
+  udyamRegistered           Boolean
+  gstRegistered             Boolean
+  gemRegistered             Boolean
+  pastProjectCategoriesJson String
+  preferredDepartmentsJson  String
+  minimumContractValue      Float?
+  maximumContractValue      Float?
+  maximumEmd                Float?
+  excludedCategoriesJson    String
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+model SearchRun {
+  id          String   @id @default(cuid())
+  engine      String
+  query       String
+  parameters  String
+  executedAt  DateTime @default(now())
+  resultCount Int      @default(0)
+  status      String
+  error       String?
+  cacheHit    Boolean  @default(false)
+  purpose     String
+  retrievedAt DateTime
+  sources     Source[]
+
+  @@index([executedAt])
+}
+
+model Source {
+  id             String   @id @default(cuid())
+  searchRunId    String
+  searchRun      SearchRun @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  position       Int
+  title          String
+  url            String
+  displayedLink  String?
+  domain         String
+  snippet        String?
+  dateText       String?
+  retrievedAt    DateTime
+  engine         String
+  authorityTier  String
+  fetchStatus    String   @default("not_attempted")
+  fetchedExcerpt String?
+  tenderLinks    TenderSource[]
+
+  @@index([searchRunId])
+  @@index([url])
+}
+
+model Tender {
+  id                         String    @id @default(cuid())
+  dedupeKey                  String    @unique
+  title                      String
+  tenderReference            String?
+  buyer                      String?
+  department                 String?
+  organisation               String?
+  primarySourceUrl           String
+  primarySourceDomain        String
+  primaryAuthorityTier       String
+  publicationDate            DateTime?
+  closingDate                DateTime?
+  openingDate                DateTime?
+  estimatedValueInr          Float?
+  emdInr                     Float?
+  tenderFeeInr               Float?
+  state                      String?
+  location                   String?
+  scope                      String?
+  categoriesJson             String    @default("[]")
+  requiredCapabilitiesJson   String    @default("[]")
+  turnoverRequirementInr     Float?
+  experienceRequirementYears Float?
+  certificationsRequiredJson String    @default("[]")
+  msmePreference             Boolean?
+  startupPreference          Boolean?
+  status                     String?
+  evidenceCorpus             String    @default("")
+  lastCheckedAt              DateTime
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  sources                    TenderSource[]
+  requirements               Requirement[]
+  evaluations                ReadinessEvaluation[]
+  watch                      WatchlistItem?
+  snapshots                  TenderSnapshot[]
+  changes                    TenderChange[]
+
+  @@index([closingDate])
+  @@index([lastCheckedAt])
+}
+
+model TenderSource {
+  id       String @id @default(cuid())
+  tenderId String
+  sourceId String
+  role     String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([tenderId, sourceId])
+  @@index([tenderId])
+}
+
+model Requirement {
+  id               String   @id @default(cuid())
+  tenderId         String
+  type             String
+  label            String
+  value            String?
+  numericValue     Float?
+  unit             String?
+  mandatoryStatus  String
+  evidenceSourceId String?
+  evidenceText     String?
+  sourceUrl        String?
+  sourceAuthority  String?
+  evidenceStatus   String
+  confidence       String
+  extractedAt      DateTime @default(now())
+  tender           Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenderId])
+}
+
+model ReadinessEvaluation {
+  id           String   @id @default(cuid())
+  tenderId     String
+  verdict      String
+  reasonsJson  String
+  blockersJson String
+  concernsJson String
+  rowsJson     String
+  matchJson    String
+  summary      String
+  evaluatedAt  DateTime @default(now())
+  tender       Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenderId, evaluatedAt])
+}
+
+model WatchlistItem {
+  id            String    @id @default(cuid())
+  tenderId      String    @unique
+  createdAt     DateTime  @default(now())
+  lastCheckedAt DateTime?
+  tender        Tender    @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+}
+
+model TenderSnapshot {
+  id                String   @id @default(cuid())
+  tenderId          String
+  capturedAt        DateTime @default(now())
+  normalizedPayload String
+  sourceHash        String
+  tender            Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenderId, capturedAt])
+}
+
+model TenderChange {
+  id          String   @id @default(cuid())
+  tenderId    String
+  detectedAt  DateTime @default(now())
+  changeType  String
+  summary     String
+  beforeValue String?
+  afterValue  String?
+  evidence    String?
+  tender      Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenderId, detectedAt])
+}
+
+model SearchCache {
+  id           String   @id @default(cuid())
+  cacheKey     String   @unique
+  engine       String
+  query        String
+  parameters   String
+  responseJson String
+  retrievedAt  DateTime
+  expiresAt    DateTime
+}

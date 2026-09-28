@@ -45,6 +45,7 @@ model SearchRun {
   error       String?
   cacheHit    Boolean  @default(false)
   purpose     String
+  dataMode    String   @default("live")
   retrievedAt DateTime
   sources     Source[]
 
@@ -102,6 +103,7 @@ model Tender {
   startupPreference          Boolean?
   status                     String?
   evidenceCorpus             String    @default("")
+  dataMode                   String    @default("live")
   lastCheckedAt              DateTime
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
@@ -114,6 +116,7 @@ model Tender {
 
   @@index([closingDate])
   @@index([lastCheckedAt])
+  @@index([dataMode])
 }
 
 model TenderSource {

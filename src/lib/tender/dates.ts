@@ -60,7 +60,7 @@ export type FoundDate = { date: Date; index: number; length: number; label: "clo
 
 function labelFor(text: string, index: number): FoundDate["label"] {
   const slice = text.slice(Math.max(0, index - 50), index + 20).toLowerCase();
-  if (/(last date|closing|due date|submission|bid end)/.test(slice)) return "closing";
+  if (/(last date|closing|due date|submission|bid end|end date|bid submission|अंतिम तिथि|समाप्ति)/.test(slice)) return "closing";
   if (/opening/.test(slice)) return "opening";
   if (/(published|publication|dated)/.test(slice)) return "publication";
   return "unknown";

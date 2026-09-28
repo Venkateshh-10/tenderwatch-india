@@ -27,15 +27,15 @@ describe("tender candidate gate", () => {
       }).confidence,
     ).toBe("HIGH");
 
-    expect(
-      classifySearchHit({
-        engine: "google",
-        title: "Bid listing",
-        url: "https://eprocure.gov.in/eprocure/app",
-        domain: "eprocure.gov.in",
-        snippet: "Central public procurement portal bid.",
-      }).hitClass,
-    ).toBe("TenderCandidate");
+    const listing = classifySearchHit({
+      engine: "google",
+      title: "Bid listing",
+      url: "https://eprocure.gov.in/eprocure/app",
+      domain: "eprocure.gov.in",
+      snippet: "Central public procurement portal bid.",
+    });
+    expect(listing.hitClass).toBe("TenderCandidate");
+    expect(listing.confidence).toBe("LOW");
 
     const gem = classifySearchHit({
       engine: "google",
@@ -90,6 +90,90 @@ describe("tender candidate gate", () => {
         url: "https://www.tn.gov.in/about",
         domain: "tn.gov.in",
         snippet: "The department manages citizen services.",
+      }).hitClass,
+    ).toBe("RejectedResult");
+  });
+
+  it("rejects diplomatic, survey, and generic management pages", () => {
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "Artificial Intelligence cooperation",
+        url: "https://www.embassy.gov.in/ai",
+        domain: "embassy.gov.in",
+        snippet: "Artificial Intelligence",
+      }).hitClass,
+    ).toBe("RejectedResult");
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "High Commission of India overview",
+        url: "https://www.hci.gov.in/",
+        domain: "hci.gov.in",
+        snippet: "High Commission services.",
+      }).hitClass,
+    ).toBe("RejectedResult");
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "Odisha Economic Survey 2018-19",
+        url: "https://finance.odisha.gov.in/economic-survey",
+        domain: "finance.odisha.gov.in",
+        snippet: "Economic Survey of the state.",
+      }).hitClass,
+    ).toBe("RejectedResult");
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "Tender Management",
+        url: "https://www.tn.gov.in/tender-management",
+        domain: "tn.gov.in",
+        snippet: "Department tender management system.",
+      }).hitClass,
+    ).toBe("RejectedResult");
+  });
+
+  it("requires a procurement path and tender identity for HIGH", () => {
+    const gem = classifySearchHit({
+      engine: "google",
+      title: "GeM bid document",
+      url: "https://bidplus.gem.gov.in/showbidDocument/412233",
+      domain: "bidplus.gem.gov.in",
+      snippet: "Bid Document for computer vision equipment.",
+    });
+    expect(gem.hitClass).toBe("TenderCandidate");
+    expect(gem.confidence).toBe("HIGH");
+
+    const nit = classifySearchHit({
+      engine: "google",
+      title: "Notice Inviting Tender",
+      url: "https://eprocure.gov.in/eprocure/app?component=view&id=1",
+      domain: "eprocure.gov.in",
+      snippet: "NIT for analytics software.",
+    });
+    expect(nit.hitClass).toBe("TenderCandidate");
+    expect(nit.confidence).toBe("HIGH");
+  });
+
+  it("keeps a corrigendum as change evidence instead of an opportunity", () => {
+    const decision = classifySearchHit({
+      engine: "google",
+      title: "Corrigendum to the bid document",
+      url: "https://eprocure.gov.in/eprocure/app?component=corrigendum",
+      domain: "eprocure.gov.in",
+      snippet: "Bid Number GEM/2026/B/412233. Extension of closing date.",
+    });
+    expect(decision.hitClass).toBe("TenderChangeCandidate");
+  });
+
+  it("rejects a garbled HTML title", () => {
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "<div>&&nbsp;&nbsp;</div>",
+        url: "https://eprocure.gov.in/eprocure/app",
+        domain: "eprocure.gov.in",
+        snippet: "Notice Inviting Tender",
       }).hitClass,
     ).toBe("RejectedResult");
   });

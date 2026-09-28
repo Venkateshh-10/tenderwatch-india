@@ -2,7 +2,7 @@ import type { ComparisonRow, MatchReason, Verdict } from "@/lib/readiness/evalua
 import { prisma } from "@/lib/db";
 import type { DataMode } from "@/lib/mode";
 import { OPPORTUNITY_DISPLAY_CAP } from "@/lib/search/limits";
-import { isDiscoverOpportunity, type TenderConfidence } from "@/lib/tender/candidate-gate";
+import { classifySearchHit, isDiscoverOpportunity, procurementPortalScore, type TenderConfidence } from "@/lib/tender/candidate-gate";
 
 const LIVE: DataMode = "live";
 
@@ -42,10 +42,13 @@ function parseArray(value: string | null | undefined): string[] {
   }
 }
 
-function rankValue(item: Pick<TenderListItem, "verdict" | "strongMatches" | "confidence">): number {
-  const verdict = item.verdict === "BID" ? 3 : item.verdict === "REVIEW" ? 2 : item.verdict === "SKIP" ? 1 : 0;
-  const confidence = item.confidence === "HIGH" ? 2 : item.confidence === "MEDIUM" ? 1 : 0;
-  return confidence * 1000 + verdict * 100 + item.strongMatches * 10;
+function rankValue(item: TenderListItem & { portal: number; hasReference: boolean; fetched: boolean; completeness: number; bestPosition: number }, now: number): number {
+  const confidence = item.confidence === "HIGH" ? 5 : 2;
+  const portal = Math.max(0, 6 - item.portal);
+  const fit = (item.verdict === "BID" ? 3 : item.verdict === "REVIEW" ? 2 : item.verdict === "SKIP" ? 1 : 0) + item.strongMatches;
+  const future = item.closingDate && item.closingDate.getTime() >= now ? 2 : 0;
+  const position = Math.max(0, 8 - item.bestPosition);
+  return confidence * 1_000_000 + portal * 100_000 + (item.hasReference ? 4 : 0) * 10_000 + (item.fetched ? 3 : 0) * 1_000 + item.completeness * 100 + fit * 10 + future * 5 + position;
 }
 
 export function displayedOpportunities(items: TenderListItem[]): TenderListItem[] {
@@ -57,14 +60,14 @@ export async function listTenders(): Promise<TenderListItem[]> {
     where: { dataMode: LIVE },
     include: {
       evaluations: { orderBy: { evaluatedAt: "desc" }, take: 1 },
-      sources: { include: { source: { select: { engine: true } } } },
+      sources: { include: { source: { select: { engine: true, fetchStatus: true, position: true } } } },
       watch: { select: { id: true } },
       _count: { select: { sources: true, changes: true } },
     },
   });
   const items = tenders.flatMap((tender) => {
     const engines = tender.sources.map((link) => link.source.engine);
-    const snippet = tender.scope ?? tender.evidenceCorpus;
+    const snippet = tender.tenderReference ? `Tender Reference ${tender.tenderReference}` : null;
     if (
       !isDiscoverOpportunity({
         title: tender.title,
@@ -79,7 +82,14 @@ export async function listTenders(): Promise<TenderListItem[]> {
     const evaluation = tender.evaluations[0];
     const blockers = parseArray(evaluation?.blockersJson);
     const matches = evaluation ? (JSON.parse(evaluation.matchJson) as MatchReason[]) : [];
-    const decisionConfidence: TenderConfidence = tender.primaryAuthorityTier === "A" || tender.primaryAuthorityTier === "B" ? "HIGH" : "MEDIUM";
+    const decision = classifySearchHit({
+      engine: engines.find((engine) => engine !== "google_news") ?? "google",
+      title: tender.title,
+      url: tender.primarySourceUrl,
+      domain: tender.primarySourceDomain,
+      snippet,
+    });
+    const positions = tender.sources.map((link) => link.source.position);
     return [{
       id: tender.id,
       title: tender.title,
@@ -101,13 +111,19 @@ export async function listTenders(): Promise<TenderListItem[]> {
       strongMatches: matches.filter((item) => item.strength === "Strong").length,
       changed: tender._count.changes > 0,
       hasNews: tender.sources.some((link) => link.source.engine === "google_news"),
-      confidence: decisionConfidence,
+      confidence: decision.confidence === "LOW" ? "MEDIUM" : decision.confidence,
       matchLabels: matches.slice(0, 4).map((item) => item.label),
       watched: Boolean(tender.watch),
+      portal: procurementPortalScore(tender.primarySourceUrl, tender.primarySourceDomain),
+      hasReference: Boolean(tender.tenderReference),
+      fetched: tender.sources.some((link) => link.source.fetchStatus === "verified_text"),
+      completeness: [tender.tenderReference, tender.buyer, tender.closingDate, tender.estimatedValueInr, tender.emdInr, tender.state].filter((value) => value != null && value !== "").length,
+      bestPosition: positions.length > 0 ? Math.min(...positions) : 20,
     }];
   });
+  const now = Date.now();
   return items.sort((a, b) => {
-    const rank = rankValue(b) - rankValue(a);
+    const rank = rankValue(b, now) - rankValue(a, now);
     if (rank !== 0) return rank;
     const aClose = a.closingDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
     const bClose = b.closingDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
@@ -138,7 +154,7 @@ export async function getTenderDetail(id: string) {
       title: tender.title,
       url: tender.primarySourceUrl,
       domain: tender.primarySourceDomain,
-      snippet: tender.scope ?? tender.evidenceCorpus,
+      snippet: tender.tenderReference ? `Tender Reference ${tender.tenderReference}` : null,
       engines,
     })
   ) {

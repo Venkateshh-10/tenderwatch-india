@@ -3,7 +3,7 @@ import type { CompanyDna } from "@/lib/company/types";
 import { prisma } from "@/lib/db";
 import { serpApiKeyPresent, type DataMode } from "@/lib/mode";
 import { evaluateReadiness, type Evaluation } from "@/lib/readiness/evaluate";
-import { SEARCH_TIMEOUT_MS, SEARCH_TIMEOUT_RETRY_MS } from "@/lib/search/limits";
+import { MAX_SOURCE_FETCHES, SEARCH_TIMEOUT_MS, SEARCH_TIMEOUT_RETRY_MS } from "@/lib/search/limits";
 import { planChangeQueries, planDiscoveryQueries, type PlannedQuery } from "@/lib/search/query-planner";
 import { buildCacheKey, cacheExpiry, cacheIsFresh } from "@/lib/serpapi/cache";
 import { searchGoogle } from "@/lib/serpapi/google";
@@ -11,14 +11,23 @@ import { searchGoogleNews } from "@/lib/serpapi/news";
 import { normalizeSerpApiResults } from "@/lib/serpapi/normalize";
 import { SerpApiError, type NormalizedHit } from "@/lib/serpapi/types";
 import { authorityRank, classifyDomain, type AuthorityTier } from "@/lib/tender/authority";
-import { classifySearchHit, type HitClass, type TenderConfidence } from "@/lib/tender/candidate-gate";
+import {
+  classifySearchHit,
+  hasProcurementIdentity,
+  isDiscoverOpportunity,
+  isNoiseDomain,
+  normalizeHitTitle,
+  procurementPortalScore,
+  type HitClass,
+  type TenderConfidence,
+} from "@/lib/tender/candidate-gate";
 import { clusterItems, dedupeKeyFor, type DedupeInput } from "@/lib/tender/dedupe";
 import { extractFacts, type RequirementDraft } from "@/lib/tender/extract";
 import { fetchPublicExcerpt } from "@/lib/tender/fetch-source";
 import { recordSnapshot } from "@/lib/tender/record-snapshot";
 import type { SnapshotPayload } from "@/lib/tender/snapshot";
 import { istDateKey } from "@/lib/tender/dates";
-import { jaccard, normalizeUrl, titleTokens, uniqueStrings } from "@/lib/tender/text";
+import { jaccard, normalizeRef, normalizeUrl, titleTokens, uniqueStrings } from "@/lib/tender/text";
 
 export type DiscoveryLogEntry = {
   engine: string;
@@ -138,11 +147,12 @@ async function storeRun(input: {
 
   const sourced: Sourced[] = [];
   for (const hit of input.hits) {
+    const title = normalizeHitTitle(hit.title) || hit.title;
     const source = await prisma.source.create({
       data: {
         searchRunId: run.id,
         position: hit.position,
-        title: hit.title,
+        title,
         url: hit.url,
         displayedLink: hit.displayedLink,
         domain: hit.domain,
@@ -156,21 +166,21 @@ async function storeRun(input: {
       },
     });
     const facts = extractFacts({
-      text: `${hit.title}\n${hit.pageText ?? hit.snippet ?? ""}`,
+      text: `${title}\n${hit.pageText ?? hit.snippet ?? ""}`,
       authority: hit.authority,
       fromPage: hit.fromPage,
       sourceUrl: hit.url,
     });
     const decision = classifySearchHit({
       engine: input.query.engine,
-      title: hit.title,
+      title,
       url: hit.url,
       domain: hit.domain,
       snippet: `${hit.snippet ?? ""}\n${hit.pageText ?? ""}`,
     });
     sourced.push({
       sourceId: source.id,
-      title: hit.title,
+      title,
       tenderReference: facts.tenderReference,
       buyer: facts.buyer,
       primarySourceUrl: hit.url,
@@ -225,6 +235,7 @@ async function materialize(
       primarySourceUrl: primary.primarySourceUrl,
       requirements,
       fromPage: ordered.some((item) => item.fromPage),
+      procurementIdentity: Boolean(facts.tenderReference) || hasProcurementIdentity(`${primary.title}\n${text}`),
     });
     const key = `${mode}:${dedupeKeyFor({ ...primary, tenderReference: facts.tenderReference ?? primary.tenderReference })}`;
     const existing = mode === "live"
@@ -350,8 +361,8 @@ function tenderData(input: {
     title: input.title,
     tenderReference: input.facts.tenderReference,
     buyer: input.facts.buyer,
-    department: null,
-    organisation: null,
+    department: input.facts.department,
+    organisation: input.facts.organisation ?? input.facts.buyer,
     primarySourceUrl: input.primary.primarySourceUrl,
     primarySourceDomain: input.primary.primarySourceDomain,
     primaryAuthorityTier: input.primary.authority,
@@ -362,8 +373,8 @@ function tenderData(input: {
     emdInr: input.facts.emdInr,
     tenderFeeInr: input.facts.tenderFeeInr,
     state: input.facts.state,
-    location: input.facts.state,
-    scope: input.text.slice(0, 700),
+    location: input.facts.location,
+    scope: input.facts.scope,
     categoriesJson: JSON.stringify(input.facts.topics),
     requiredCapabilitiesJson: JSON.stringify(input.facts.topics),
     turnoverRequirementInr: input.facts.turnoverRequirementInr,
@@ -378,10 +389,25 @@ function tenderData(input: {
   };
 }
 
+function fetchRank(hit: NormalizedHit): number {
+  const decision = classifySearchHit({
+    engine: hit.engine,
+    title: hit.title,
+    url: hit.url,
+    domain: hit.domain,
+    snippet: hit.snippet,
+  });
+  const confidence = decision.confidence === "HIGH" ? 0 : decision.confidence === "MEDIUM" ? 1 : 2;
+  return confidence * 100 + procurementPortalScore(hit.url, hit.domain) * 10 + hit.position;
+}
+
 async function enrichOfficialPages(hits: NormalizedHit[]): Promise<Map<string, string>> {
   const excerpts = new Map<string, string>();
-  const official = hits.filter((hit) => classifyDomain(hit.domain) === "A").slice(0, 3);
-  for (const hit of official) {
+  const ranked = [...hits]
+    .filter((hit) => !isNoiseDomain(hit.domain) && classifyDomain(hit.domain) !== "D")
+    .sort((left, right) => fetchRank(left) - fetchRank(right))
+    .slice(0, MAX_SOURCE_FETCHES);
+  for (const hit of ranked) {
     const result = await fetchPublicExcerpt(hit.url);
     if (result.excerpt) excerpts.set(hit.url, result.excerpt);
   }
@@ -476,6 +502,7 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
   const excerpts = candidateHits.length > 0 ? await enrichOfficialPages(candidateHits) : new Map<string, string>();
   const cards: Sourced[] = [];
   const newsRows: Sourced[] = [];
+  const changeRows: Sourced[] = [];
   let rejectedCount = 0;
   for (const batch of liveHits) {
     const rows = await storeRun({
@@ -500,13 +527,15 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
     });
     const batchCards = rows.filter(isOpportunitySource);
     const batchNews = rows.filter((row) => row.hitClass === "SupportingNews");
-    const batchRejected = rows.length - batchCards.length - batchNews.length;
+    const batchChanges = rows.filter((row) => row.hitClass === "TenderChangeCandidate");
+    const batchRejected = rows.length - batchCards.length - batchNews.length - batchChanges.length;
     cards.push(...batchCards);
     newsRows.push(...batchNews);
+    changeRows.push(...batchChanges);
     rejectedCount += batchRejected;
     const entry = log.find((item) => item.query === batch.query.query && item.engine === batch.query.engine && item.status === "success");
     if (entry) {
-      entry.message = `${batchCards.length} tender candidates, ${batchNews.length} supporting news, ${batchRejected} rejected. ${entry.message ?? ""}`.trim();
+      entry.message = `${batchCards.length} tender candidates, ${batchChanges.length} changes, ${batchNews.length} supporting news, ${batchRejected} rejected. ${entry.message ?? ""}`.trim();
     }
   }
 
@@ -526,6 +555,8 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
 
   const counts = cards.length > 0 ? await materialize(cards, company, "live") : { unique: 0, relevant: 0, records: [] };
   await attachSupportingNews(counts.records, newsRows);
+  await attachChangeCandidates(counts.records, changeRows);
+  await retireFailedOpportunities();
   return attachVerification({
     mode,
     log,
@@ -552,9 +583,54 @@ function newsSupportsTender(news: Sourced, tender: { title: string; tenderRefere
   const blob = `${news.title}\n${news.snippet}\n${news.pageText ?? ""}`.toLowerCase();
   const reference = tender.tenderReference?.trim();
   if (reference && reference.length >= 5 && blob.includes(reference.toLowerCase())) return true;
-  const buyer = tender.buyer?.trim();
-  if (buyer && buyer.length >= 8 && blob.includes(buyer.toLowerCase())) return true;
-  return jaccard(titleTokens(news.title), titleTokens(tender.title)) >= 0.45;
+  const similarity = jaccard(titleTokens(news.title), titleTokens(tender.title));
+  if (similarity >= 0.62) return true;
+  const buyer = tender.buyer?.trim().toLowerCase();
+  return Boolean(buyer && buyer.length >= 8 && blob.includes(buyer) && similarity >= 0.35);
+}
+
+async function attachChangeCandidates(
+  records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }>,
+  changes: Sourced[],
+) {
+  for (const item of changes) {
+    const match = records.find((record) => {
+      if (item.tenderReference && record.tenderReference && normalizeRef(item.tenderReference) === normalizeRef(record.tenderReference)) return true;
+      return jaccard(titleTokens(item.title), titleTokens(record.title)) >= 0.62;
+    });
+    if (!match) continue;
+    await prisma.tenderSource.upsert({
+      where: { tenderId_sourceId: { tenderId: match.id, sourceId: item.sourceId } },
+      create: { tenderId: match.id, sourceId: item.sourceId, role: "change" },
+      update: { role: "change" },
+    });
+  }
+}
+
+async function retireFailedOpportunities() {
+  const tenders = await prisma.tender.findMany({
+    where: { dataMode: "live" },
+    select: {
+      id: true,
+      title: true,
+      tenderReference: true,
+      primarySourceUrl: true,
+      primarySourceDomain: true,
+      sources: { select: { source: { select: { engine: true } } } },
+    },
+  });
+  const stale = tenders.filter(
+    (tender) =>
+      !isDiscoverOpportunity({
+        title: tender.title,
+        url: tender.primarySourceUrl,
+        domain: tender.primarySourceDomain,
+        snippet: tender.tenderReference ? `Tender Reference ${tender.tenderReference}` : null,
+        engines: tender.sources.map((link) => link.source.engine),
+      }),
+  );
+  if (stale.length === 0) return;
+  await prisma.tender.deleteMany({ where: { id: { in: stale.map((tender) => tender.id) } } });
 }
 
 async function attachSupportingNews(
@@ -742,6 +818,7 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
     primarySourceUrl: primary.primarySourceUrl,
     requirements,
     fromPage: ordered.some((item) => item.fromPage),
+    procurementIdentity: Boolean(facts.tenderReference) || hasProcurementIdentity(`${primary.title || tender.title}\n${text}`),
   });
   await prisma.readinessEvaluation.create({
     data: {

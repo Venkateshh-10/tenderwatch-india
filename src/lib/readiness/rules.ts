@@ -33,3 +33,7 @@ export function companyHasCertification(companyCerts: string[], required: string
     return have.includes(needle) || needle.includes(have);
   });
 }
+
+export function companyHasRegistration(companyRegistrations: string[], required: string): boolean {
+  return companyHasCertification(companyRegistrations, required);
+}

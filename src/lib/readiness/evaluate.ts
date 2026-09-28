@@ -7,6 +7,7 @@ import {
   certificationBlocks,
   companyAgeBlocks,
   companyHasCertification,
+  companyHasRegistration,
   deadlineBlocks,
   emdBlocks,
   experienceBlocks,
@@ -68,6 +69,8 @@ export function evaluateReadiness(input: {
   requirements: RequirementDraft[];
   fromPage?: boolean;
   now?: Date;
+  /** True only when a bid number, NIT, RFP, EOI, or equivalent identity was actually extracted. */
+  procurementIdentity?: boolean;
 }): Evaluation {
   const now = input.now ?? new Date();
   const rows: ComparisonRow[] = [];
@@ -220,7 +223,7 @@ export function evaluateReadiness(input: {
   if (experience?.numericValue != null) {
     const blocked = experienceBlocks(experience.numericValue, input.company.companyAgeYears, verified(experience), mandatory(experience));
     if (blocked) blockers.push(`Required experience of ${experience.numericValue} years exceeds the company age of ${input.company.companyAgeYears} years.`);
-    else concerns.push("Relevant prior experience is not independently verified.");
+    else if (mandatory(experience)) concerns.push("Relevant prior experience is not independently verified.");
     rows.push(row("experience", "Experience", `${experience.numericValue} years`, `${input.company.companyAgeYears} years old`, blocked ? "BLOCKER" : "CONCERN", experience));
   }
 
@@ -230,6 +233,14 @@ export function evaluateReadiness(input: {
     if (blocked) blockers.push(`${requirement.label} is required and missing.`);
     else if (!has && mandatory(requirement)) concerns.push(`${requirement.label} appears required, but the evidence is not verified.`);
     rows.push(row(requirement.type, requirement.label, requirement.value ?? "Required", has ? "Available" : "Missing", blocked ? "BLOCKER" : has ? "PASS" : "CONCERN", requirement));
+  }
+
+  for (const requirement of input.requirements.filter((item) => item.type.startsWith("registration:"))) {
+    const has = companyHasRegistration(input.company.registrations, requirement.label);
+    const blocked = certificationBlocks(has, verified(requirement), mandatory(requirement));
+    if (blocked) blockers.push(`${requirement.label} registration is required and missing.`);
+    else if (!has && mandatory(requirement)) concerns.push(`${requirement.label} registration appears required, but the evidence is not verified.`);
+    rows.push(row(requirement.type, `${requirement.label} registration`, requirement.value ?? "Required", has ? "Available" : "Missing", blocked ? "BLOCKER" : has ? "PASS" : mandatory(requirement) ? "CONCERN" : "UNKNOWN", requirement));
   }
 
   const emd = requirementOf(input.requirements, "emd");
@@ -247,17 +258,33 @@ export function evaluateReadiness(input: {
   if (excluded) blockers.push(`Excluded category mentioned: ${excluded}.`);
 
   const official = input.primaryAuthority === "A" || input.primaryAuthority === "B";
-  const materialConcerns = concerns.filter((item) => !item.startsWith("Limited preparation"));
+  const criticalConcerns = concerns.filter(
+    (item) => !item.startsWith("Limited preparation") && !/estimated value|tender fee|buyer is not|department is not/i.test(item),
+  );
+  const deadlineOpen = rows.find((item) => item.key === "deadline")?.status === "PASS";
+  const activeSupported =
+    input.fromPage === true &&
+    official &&
+    /\b(status\s*[:\-]\s*active|bid is live|tender is open)\b/i.test(input.evidenceText);
+  const identity = input.procurementIdentity === true;
   let verdict: Verdict;
   if (blockers.length > 0 || !relevant) {
     verdict = "SKIP";
     if (!relevant && blockers.length === 0) reasons.push("The notice does not match the company capabilities.");
-  } else if (strong && official && materialConcerns.length === 0 && (capabilityEvidence === "VERIFIED" || capabilityEvidence === "SUPPORTED")) {
+  } else if (
+    strong &&
+    official &&
+    identity &&
+    criticalConcerns.length === 0 &&
+    (deadlineOpen || activeSupported) &&
+    (capabilityEvidence === "VERIFIED" || capabilityEvidence === "SUPPORTED")
+  ) {
     verdict = "BID";
-    reasons.push("Capabilities match and no verified hard blocker is on file.");
+    reasons.push("Procurement identity is verified, the capability fit is strong, and no verified hard blocker is on file.");
   } else {
     verdict = "REVIEW";
-    reasons.push("The opportunity may be relevant, but evidence is incomplete or a concern needs review.");
+    if (!identity) reasons.push("Procurement identity is not verified.");
+    reasons.push("The opportunity may be relevant, but critical eligibility evidence is still incomplete.");
   }
   reasons.push(...blockers, ...concerns);
 
@@ -267,8 +294,8 @@ export function evaluateReadiness(input: {
       : verdict === "SKIP"
         ? "SKIP — does not match the company"
         : verdict === "BID"
-          ? "BID — no verified hard blocker"
-          : `REVIEW — ${materialConcerns.length || concerns.length} open concern${(materialConcerns.length || concerns.length) === 1 ? "" : "s"}`;
+          ? "BID — verified identity and no hard blocker"
+          : `REVIEW — ${criticalConcerns.length || concerns.length} open concern${(criticalConcerns.length || concerns.length) === 1 ? "" : "s"}`;
 
   return { verdict, summary, reasons, blockers, concerns, rows, matches: uniqueMatches };
 }

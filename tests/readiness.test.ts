@@ -110,6 +110,94 @@ describe("readiness", () => {
     expect(evaluation.verdict).toBe("SKIP");
     expect(evaluation.blockers.some((item) => item.includes("ISO 27001"))).toBe(true);
   });
+
+  it("can bid when identity, fit, and a future deadline are known even if value and fee are missing", () => {
+    const evaluation = evaluateReadiness({
+      company: EXAMPLE_COMPANY,
+      title: "Notice Inviting Tender for computer vision cameras",
+      evidenceText: "NIT No. TN/CV/2026/014. Computer vision analytics for Tamil Nadu.",
+      state: "Tamil Nadu",
+      closingDate: new Date("2026-12-20T00:00:00+05:30"),
+      estimatedValueInr: null,
+      primaryAuthority: "A",
+      primarySourceUrl: "https://eprocure.gov.in/eprocure/app",
+      requirements: [],
+      fromPage: true,
+      procurementIdentity: true,
+      now: new Date("2026-09-28T10:00:00+05:30"),
+    });
+    expect(evaluation.verdict).toBe("BID");
+    expect(evaluation.blockers).toHaveLength(0);
+    expect(evaluation.concerns.some((item) => /estimated value|tender fee/i.test(item))).toBe(false);
+  });
+
+  it("does not treat a held GST registration as a blocker", () => {
+    const facts = extractFacts({
+      text: "NIT No. TN/CV/2026/014. GST registration is mandatory. Computer vision cameras for Tamil Nadu. Bid submission end date: 20/12/2026.",
+      authority: "A",
+      fromPage: true,
+      sourceUrl: "https://eprocure.gov.in/eprocure/app",
+    });
+    const evaluation = evaluateReadiness({
+      company: EXAMPLE_COMPANY,
+      title: "Notice Inviting Tender for computer vision cameras",
+      evidenceText: facts.requirements.map((item) => item.evidenceText).join(" ") || "Computer vision cameras for Tamil Nadu.",
+      state: "Tamil Nadu",
+      closingDate: facts.closingDate,
+      estimatedValueInr: null,
+      primaryAuthority: "A",
+      primarySourceUrl: "https://eprocure.gov.in/eprocure/app",
+      requirements: facts.requirements,
+      fromPage: true,
+      procurementIdentity: true,
+      now: new Date("2026-09-28T10:00:00+05:30"),
+    });
+    expect(evaluation.verdict).toBe("BID");
+    expect(evaluation.blockers).toHaveLength(0);
+  });
+
+  it("skips a verified mandatory GeM registration the company does not hold", () => {
+    const facts = extractFacts({
+      text: "NIT No. TN/CV/2026/014. Bidders must be registered on GeM. Computer vision cameras for Tamil Nadu. Bid submission end date: 20/12/2026.",
+      authority: "A",
+      fromPage: true,
+      sourceUrl: "https://bidplus.gem.gov.in/showbidDocument/412233",
+    });
+    const evaluation = evaluateReadiness({
+      company: EXAMPLE_COMPANY,
+      title: "Notice Inviting Tender for computer vision cameras",
+      evidenceText: "Bidders must be registered on GeM. Computer vision cameras for Tamil Nadu.",
+      state: "Tamil Nadu",
+      closingDate: facts.closingDate,
+      estimatedValueInr: null,
+      primaryAuthority: "A",
+      primarySourceUrl: "https://bidplus.gem.gov.in/showbidDocument/412233",
+      requirements: facts.requirements,
+      fromPage: true,
+      procurementIdentity: true,
+      now: new Date("2026-09-28T10:00:00+05:30"),
+    });
+    expect(evaluation.verdict).toBe("SKIP");
+    expect(evaluation.blockers.some((item) => item.includes("GeM"))).toBe(true);
+  });
+
+  it("does not bid when the closing date and active status are both unknown", () => {
+    const evaluation = evaluateReadiness({
+      company: EXAMPLE_COMPANY,
+      title: "Notice Inviting Tender for computer vision cameras",
+      evidenceText: "NIT No. TN/CV/2026/014. Computer vision analytics for Tamil Nadu.",
+      state: "Tamil Nadu",
+      closingDate: null,
+      estimatedValueInr: null,
+      primaryAuthority: "A",
+      primarySourceUrl: "https://eprocure.gov.in/eprocure/app",
+      requirements: [],
+      fromPage: true,
+      procurementIdentity: true,
+      now: new Date("2026-09-28T10:00:00+05:30"),
+    });
+    expect(evaluation.verdict).toBe("REVIEW");
+  });
 });
 
 describe("serpapi normalization and cache", () => {

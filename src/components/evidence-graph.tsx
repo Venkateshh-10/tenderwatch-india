@@ -25,9 +25,10 @@ export function EvidenceGraph({ nodes, edges }: { nodes: EvidenceNode[]; edges: 
           width: 240,
           fontSize: 12,
           lineHeight: 1.35,
-          border: "1px solid #cfc4ad",
-          borderRadius: 10,
-          background: "#fff",
+          border: "1px solid #1D3043",
+          borderRadius: 8,
+          background: "#111E2C",
+          color: "#F5F7FA",
           padding: 8,
         },
       })),
@@ -46,14 +47,15 @@ export function EvidenceGraph({ nodes, edges }: { nodes: EvidenceNode[]; edges: 
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-[#5c564c]">
+      <p className="text-[12px] text-muted-foreground">
         Nodes come from stored buyer, department, official sources, change evidence, and notices with the same buyer.
       </p>
-      <div className="h-[420px] overflow-hidden rounded-lg border border-[#e4dccb]">
+      <div className="h-[420px] overflow-hidden rounded-md border border-border bg-background">
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
           fitView
+          colorMode="dark"
           nodesDraggable={false}
           nodesConnectable={false}
           onNodeClick={(_event, node) => setSelected(node.data)}
@@ -62,7 +64,7 @@ export function EvidenceGraph({ nodes, edges }: { nodes: EvidenceNode[]; edges: 
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
-      <div className="rounded-lg border border-[#efe8da] bg-[#fbf7ef] p-3 text-sm">
+      <div className="rounded-md border border-border bg-elevated p-3 text-[12px]">
         {selected ? (
           <div className="space-y-1">
             <p className="font-medium">{selected.kind}</p>

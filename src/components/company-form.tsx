@@ -87,7 +87,7 @@ export function CompanyForm({ initial }: { initial: CompanyDna }) {
       </div>
       <div className="md:col-span-2 flex items-center gap-3">
         <Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save Company DNA"}</Button>
-        {message ? <p className="text-sm text-[#3d3832]">{message}</p> : null}
+        {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
       </div>
     </form>
   );

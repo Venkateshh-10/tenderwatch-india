@@ -26,10 +26,10 @@ export function CheckUpdatesButton({ tenderId }: { tenderId: string }) {
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <Button variant="outline" onClick={check} disabled={pending}>
-        {pending ? "Checking…" : "Check for updates"}
+      <Button variant="outline" size="sm" onClick={check} disabled={pending}>
+        {pending ? "Checking…" : "Check for Updates"}
       </Button>
-      {message ? <p className="text-xs text-[#5c564c]">{message}</p> : null}
+      {message ? <p className="max-w-48 text-[11px] text-muted-foreground">{message}</p> : null}
     </div>
   );
 }

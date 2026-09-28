@@ -1,41 +1,37 @@
 import { DiscoverRunner } from "@/components/discover-runner";
 import { TenderCard } from "@/components/tender-card";
-import { formatIst } from "@/lib/format";
+import { formatIst, formatSearchParameters } from "@/lib/format";
 import { serpApiKeyPresent } from "@/lib/mode";
 import { displayedOpportunities, latestLiveRetrieval, listSearchRuns, listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DiscoverPage() {
-  const [tenders, runs, lastVerified] = await Promise.all([listTenders(), listSearchRuns(), latestLiveRetrieval()]);
+  const [tenders, runs, lastVerified] = await Promise.all([listTenders(), listSearchRuns(40), latestLiveRetrieval()]);
   const shown = displayedOpportunities(tenders);
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <DiscoverRunner liveSearch={serpApiKeyPresent()} />
-      <section className="space-y-3">
-        <h2 className="font-serif text-2xl">Stored live notices</h2>
-        {lastVerified ? <p className="text-sm text-[#5c564c]">Showing last verified live result. Retrieved: {formatIst(lastVerified)}</p> : null}
-        {tenders.length === 0 ? (
-          <p className="text-sm text-[#5c564c]">No verified data available.</p>
-        ) : (
-          shown.map((item) => <TenderCard key={item.id} item={item} />)
-        )}
+      <section className="space-y-2">
+        <h2 className="text-base font-semibold">Stored live notices</h2>
+        {lastVerified ? <p className="text-[12px] text-muted-foreground">Showing last verified live result. Retrieved: {formatIst(lastVerified)}</p> : null}
+        {tenders.length === 0 ? <p className="text-[13px] text-muted-foreground">No verified data available.</p> : shown.map((item) => <TenderCard key={item.id} item={item} />)}
       </section>
-      <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
-        <h2 className="font-serif text-2xl">Search provenance</h2>
+      <section id="queries" className="rounded-md border border-border bg-card p-3">
+        <h2 className="text-base font-semibold">Search provenance</h2>
         {runs.length === 0 ? (
-          <p className="mt-2 text-sm text-[#5c564c]">No searches stored yet.</p>
+          <p className="mt-2 text-[13px] text-muted-foreground">No searches stored yet.</p>
         ) : (
-          <ul className="mt-3 space-y-3 text-sm">
+          <ul className="mt-2 space-y-2 text-[12px]">
             {runs.map((run) => (
-              <li key={run.id} className="border-t border-[#efe8da] pt-3">
+              <li key={run.id} className="rounded-md border border-border bg-elevated px-2.5 py-2">
                 <p className="font-medium">{run.engine === "google_news" ? "Google News via SerpApi" : "Google Search via SerpApi"}</p>
-                <p>{run.query}</p>
-                <p className="text-[#5c564c]">
-                  gl=in · hl=en · {run._count.sources} sources · {run.status}
+                <p className="font-mono text-[11px]">{run.query}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {formatSearchParameters(run.parameters)} · {run._count.sources} sources · {run.status}
                   {run.cacheHit ? " · cached live result" : ""} · {formatIst(run.retrievedAt)}
                 </p>
-                {run.error ? <p className="text-rose-800">{run.error}</p> : null}
+                {run.error ? <p className="text-[11px] text-[#EF4444]">{run.error}</p> : null}
               </li>
             ))}
           </ul>

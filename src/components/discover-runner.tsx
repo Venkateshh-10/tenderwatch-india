@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { formatIst } from "@/lib/format";
 import type { DiscoveryResult } from "@/lib/discovery/run";
 
-export function DiscoverRunner({ liveSearch }: { liveSearch: boolean }) {
+export function DiscoverRunner({ liveSearch, compact = false }: { liveSearch: boolean; compact?: boolean }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<DiscoveryResult | null>(null);
@@ -33,36 +33,42 @@ export function DiscoverRunner({ liveSearch }: { liveSearch: boolean }) {
   }
 
   return (
-    <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="font-serif text-2xl text-[#16302b]">Discover live opportunities</h2>
-          <p className="text-sm text-[#5c564c]">
-            Plans a short set of Google Search and Google News queries from Company DNA, then calls SerpApi. News items stay supporting context.
-          </p>
-        </div>
+    <section className={compact ? "" : "rounded-md border border-border bg-card p-3"}>
+      <div className={compact ? "flex flex-wrap gap-2" : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"}>
+        {compact ? null : (
+          <div>
+            <h2 className="text-base font-semibold">Discover Live Opportunities</h2>
+            <p className="text-[12px] text-muted-foreground">
+              Plans Google Search and Google News queries from Company DNA, then calls SerpApi. News stays supporting context.
+            </p>
+          </div>
+        )}
         <div className="flex gap-2">
-          <Button onClick={() => run(false)} disabled={pending}>
+          <Button size="sm" onClick={() => run(false)} disabled={pending}>
             {pending ? "Searching SerpApi…" : "Discover Live Opportunities"}
           </Button>
-          <Button variant="outline" onClick={() => run(true)} disabled={pending || !liveSearch}>
+          <Button size="sm" variant="outline" onClick={() => run(true)} disabled={pending || !liveSearch}>
             Refresh Live
           </Button>
         </div>
       </div>
       {pending ? (
-        <p className="mt-4 text-sm text-[#5c564c]">Calling SerpApi. This log fills in when each search returns. It does not advance on a timer.</p>
+        <div className="mt-3 space-y-1.5" aria-hidden>
+          <div className="h-2 w-2/3 animate-pulse rounded bg-elevated" />
+          <div className="h-2 w-1/2 animate-pulse rounded bg-elevated" />
+          <p className="text-[11px] text-muted-foreground">Calling SerpApi. Checks update when a search returns.</p>
+        </div>
       ) : null}
       {error ? (
-        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-          <p className="font-medium">Live search unavailable</p>
+        <div className="mt-3 rounded-md border border-[#EF4444]/40 bg-[#EF4444]/10 p-2.5 text-[12px] text-[#F5F7FA]">
+          <p className="font-medium text-[#EF4444]">Live search unavailable</p>
           <p className="mt-1">Reason: {error}</p>
           {result?.notice ? <p className="mt-1">{result.notice}</p> : null}
           {result?.lastVerifiedAt ? <p>Retrieved: {formatIst(result.lastVerifiedAt)}</p> : null}
           {!liveSearch && result?.planned?.length ? (
-            <div className="mt-3 text-[#3d3832]">
+            <div className="mt-2 text-muted-foreground">
               <p>These queries were planned from Company DNA and were not sent.</p>
-              <ul className="mt-1 list-disc pl-5">
+              <ul className="mt-1 space-y-1 font-mono text-[11px]">
                 {result.planned.map((query) => (
                   <li key={`${query.engine}-${query.query}`}>
                     {query.engine} · {query.query}
@@ -71,16 +77,16 @@ export function DiscoverRunner({ liveSearch }: { liveSearch: boolean }) {
               </ul>
             </div>
           ) : null}
-          <Button className="mt-3" size="sm" variant="outline" onClick={() => run(true)} disabled={pending || !liveSearch}>
+          <Button className="mt-2" size="sm" variant="outline" onClick={() => run(true)} disabled={pending || !liveSearch}>
             Retry Live Search
           </Button>
         </div>
       ) : null}
       {result && !error ? (
-        <div className="mt-4 space-y-2 text-sm">
+        <div className="mt-3 space-y-1.5 text-[12px]">
           <p>
-            {result.searchResultCount} search results · {result.uniqueOpportunities} tender candidates ·{" "}
-            {result.relevantOpportunities} bid or review · {result.rejectedCount ?? 0} rejected · {result.supportingNewsCount ?? 0} news items kept as context
+            {result.searchResultCount} search results · {result.uniqueOpportunities} tender candidates · {result.relevantOpportunities} bid or review ·{" "}
+            {result.rejectedCount ?? 0} rejected · {result.supportingNewsCount ?? 0} news items kept as context
           </p>
           {result.notice ? (
             <p>
@@ -88,15 +94,11 @@ export function DiscoverRunner({ liveSearch }: { liveSearch: boolean }) {
               {result.lastVerifiedAt ? ` · Retrieved: ${formatIst(result.lastVerifiedAt)}` : ""}
             </p>
           ) : null}
-          <ul className="space-y-1 text-[#3d3832]">
+          <ul className="space-y-1 font-mono text-[11px] text-muted-foreground">
             {result.log.map((entry, index) => (
               <li key={`${entry.query}-${index}`}>
-                <span className="font-medium">{entry.engine === "google_news" ? "Google News via SerpApi" : "Google Search via SerpApi"}</span>
-                {" · "}
-                {entry.query}
-                {" · "}
-                {entry.resultCount} results
-                {entry.cacheHit ? " · cached live result" : ""}
+                {entry.engine === "google_news" ? "news" : "google"} · {entry.query} · {entry.resultCount} results
+                {entry.cacheHit ? " · cached" : ""}
                 {entry.retrievedAt ? ` · ${formatIst(entry.retrievedAt)}` : ""}
                 {entry.message ? ` · ${entry.message}` : ""}
               </li>

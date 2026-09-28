@@ -28,6 +28,7 @@ export type ComparisonRow = {
   sourceUrl: string | null;
   authority: string | null;
   mandatory: boolean;
+  page?: number | null;
 };
 
 export type MatchReason = {
@@ -319,6 +320,7 @@ function row(
     sourceUrl: source?.sourceUrl ?? null,
     authority: source?.sourceAuthority ?? null,
     mandatory: source?.mandatoryStatus === "mandatory",
+    page: source?.page ?? null,
   };
 }
 

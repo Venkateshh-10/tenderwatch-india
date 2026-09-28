@@ -59,10 +59,17 @@ export function daysUntil(closing: Date, now: Date): number {
 export type FoundDate = { date: Date; index: number; length: number; label: "closing" | "opening" | "publication" | "unknown" };
 
 function labelFor(text: string, index: number): FoundDate["label"] {
-  const slice = text.slice(Math.max(0, index - 50), index + 20).toLowerCase();
-  if (/(last date|closing|due date|submission|bid end|end date|bid submission|अंतिम तिथि|समाप्ति)/.test(slice)) return "closing";
-  if (/opening/.test(slice)) return "opening";
-  if (/(published|publication|dated)/.test(slice)) return "publication";
+  const lineStart = text.lastIndexOf("\n", Math.max(0, index - 1));
+  const current = classifyDateLabel(text.slice(lineStart + 1, index + 24));
+  if (current !== "unknown") return current;
+  return classifyDateLabel(text.slice(Math.max(0, index - 40), index + 24));
+}
+
+function classifyDateLabel(slice: string): FoundDate["label"] {
+  const value = slice.toLowerCase();
+  if (/(last date|closing|due date|submission|bid end|end date|bid submission|अंतिम तिथि|समाप्ति)/.test(value)) return "closing";
+  if (/opening/.test(value)) return "opening";
+  if (/(published|publication|dated)/.test(value)) return "publication";
   return "unknown";
 }
 

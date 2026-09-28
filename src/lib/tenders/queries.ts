@@ -2,7 +2,9 @@ import type { ComparisonRow, MatchReason, Verdict } from "@/lib/readiness/evalua
 import { prisma } from "@/lib/db";
 import type { DataMode } from "@/lib/mode";
 import { OPPORTUNITY_DISPLAY_CAP } from "@/lib/search/limits";
+import { isVerifiedClosedTender } from "@/lib/tender/active";
 import { classifySearchHit, isDiscoverOpportunity, procurementPortalScore, type TenderConfidence } from "@/lib/tender/candidate-gate";
+import { isVerifiedFetch } from "@/lib/tender/fetch-source";
 
 const LIVE: DataMode = "live";
 
@@ -55,7 +57,7 @@ export function displayedOpportunities(items: TenderListItem[]): TenderListItem[
   return items.slice(0, OPPORTUNITY_DISPLAY_CAP);
 }
 
-export async function listTenders(): Promise<TenderListItem[]> {
+export async function listTenders(options?: { includeClosed?: boolean }): Promise<TenderListItem[]> {
   const tenders = await prisma.tender.findMany({
     where: { dataMode: LIVE },
     include: {
@@ -67,6 +69,8 @@ export async function listTenders(): Promise<TenderListItem[]> {
   });
   const items = tenders.flatMap((tender) => {
     const engines = tender.sources.map((link) => link.source.engine);
+    const verified = tender.sources.some((link) => isVerifiedFetch(link.source.fetchStatus));
+    if (!options?.includeClosed && isVerifiedClosedTender({ status: tender.status, closingDate: tender.closingDate, verified })) return [];
     const snippet = tender.tenderReference ? `Tender Reference ${tender.tenderReference}` : null;
     if (
       !isDiscoverOpportunity({
@@ -116,7 +120,7 @@ export async function listTenders(): Promise<TenderListItem[]> {
       watched: Boolean(tender.watch),
       portal: procurementPortalScore(tender.primarySourceUrl, tender.primarySourceDomain),
       hasReference: Boolean(tender.tenderReference),
-      fetched: tender.sources.some((link) => link.source.fetchStatus === "verified_text"),
+      fetched: verified,
       completeness: [tender.tenderReference, tender.buyer, tender.closingDate, tender.estimatedValueInr, tender.emdInr, tender.state].filter((value) => value != null && value !== "").length,
       bestPosition: positions.length > 0 ? Math.min(...positions) : 20,
     }];

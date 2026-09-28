@@ -11,7 +11,7 @@ export default async function WatchlistPage() {
     select: { tenderId: true },
   });
   const ids = new Set(watched.map((item) => item.tenderId));
-  const tenders = (await listTenders()).filter((item) => ids.has(item.id));
+  const tenders = (await listTenders({ includeClosed: true })).filter((item) => ids.has(item.id));
   return (
     <div className="space-y-3">
       <div>

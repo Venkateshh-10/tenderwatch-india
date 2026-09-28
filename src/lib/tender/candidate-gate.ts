@@ -237,11 +237,11 @@ export function classifySearchHit(input: {
     }
     return reject("News item has no procurement signal.");
   }
-  if (staleArchive(`${title}\n${snippet}`, now)) return reject("Stale archive page.");
   if (bareHomepage(input.url)) return reject("Generic department homepage.");
 
   const path = hasProcurementPath(input.url, domain);
   const identity = hasProcurementIdentity(text);
+  if (staleArchive(`${title}\n${snippet}`, now) && !(path && identity)) return reject("Stale archive page.");
   const signals = [path ? "procurement_path" : null, identity ? "procurement_identity" : null].filter((item): item is string => Boolean(item));
 
   if (standaloneChange(title)) {

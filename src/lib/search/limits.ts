@@ -7,6 +7,8 @@ export const OPPORTUNITY_DISPLAY_CAP = 8;
 export const SEARCH_CONCURRENCY = 1;
 export const MAX_SOURCE_FETCHES = 8;
 export const SOURCE_FETCH_TIMEOUT_MS = 8_000;
+export const DOCUMENT_FETCH_TIMEOUT_MS = 20_000;
+export const MAX_DOCUMENT_BYTES = 8_000_000;
 
 export function cacheTtlMs(): number {
   const hours = Number(process.env.SEARCH_CACHE_TTL_HOURS ?? 12);

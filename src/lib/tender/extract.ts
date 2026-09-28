@@ -1,7 +1,7 @@
 import type { AuthorityTier } from "@/lib/tender/authority";
 import { firstLabeledDate } from "@/lib/tender/dates";
 import { parseInrAmount } from "@/lib/tender/money";
-import { normalizeRef, normalizeWhitespace, uniqueStrings, windowAround } from "@/lib/tender/text";
+import { normalizeRef, uniqueStrings, windowAround } from "@/lib/tender/text";
 
 export type EvidenceStatus = "VERIFIED" | "SUPPORTED" | "UNVERIFIED" | "UNKNOWN";
 export type MandatoryStatus = "mandatory" | "preferred" | "informational";
@@ -18,6 +18,7 @@ export type RequirementDraft = {
   sourceAuthority: AuthorityTier | null;
   evidenceStatus: EvidenceStatus;
   confidence: "high" | "medium" | "low";
+  page?: number | null;
 };
 
 const STATES = [
@@ -110,20 +111,24 @@ export function evidenceFor(authority: AuthorityTier, fromPage: boolean, kind: "
 function moneyNear(text: string, keyword: RegExp): { amount: number; index: number; raw: string } | null {
   const match = keyword.exec(text);
   if (!match || match.index == null) return null;
-  const window = text.slice(match.index, match.index + 90);
-  const amountMatch = window.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(crores?|cr\.?|lakhs?|lacs?)?/i);
+  const window = text.slice(match.index, match.index + 160);
+  const amountMatch = window.match(/(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(crores?|cr\.?|lakhs?|lacs?)?|([\d,]+(?:\.\d+)?)\s*(crores?|cr\.?|lakhs?|lacs?)|(?<![\d/.-])(\d{1,3}(?:,\d{2,3})+|\d{5,})(?![\d/.-])/i);
   if (!amountMatch) return null;
-  const amount = parseInrAmount(amountMatch[1], amountMatch[2] ?? null);
+  const rawNumber = amountMatch[1] ?? amountMatch[3] ?? amountMatch[5];
+  if (!rawNumber) return null;
+  const amount = parseInrAmount(rawNumber, amountMatch[2] ?? amountMatch[4] ?? null);
   if (amount == null) return null;
   return { amount, index: match.index, raw: window };
 }
 
 export function normalizeExtractionText(value: string): string {
-  return normalizeWhitespace(
-    value
-      .normalize("NFKC")
-      .replace(/[\u00a0\u1680\u2000-\u200d\u202f\u205f\u3000\ufeff]/g, " "),
-  );
+  return value
+    .normalize("NFKC")
+    .replace(/[\u00a0\u1680\u2000-\u200d\u202f\u205f\u3000\ufeff]/g, " ")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function cleanToken(token: string): string | null {
@@ -161,8 +166,9 @@ function partyAfter(text: string, label: RegExp): string | null {
   if (!match || match.index == null) return null;
   const raw = match[1]?.trim();
   if (!raw) return null;
-  const cleaned = raw.replace(/\s+(invites|has invited|for the|under the)$/i, "").trim();
-  if (cleaned.length < 4 || cleaned.length > 120) return null;
+  const clipped = raw.split(/\s+(?=(?:ministry\s*\/|department name|organisation name|organization name|office name|item category|total quantity|estimated bid|emd amount|emd detail|buyer email|place of|bid (?:end|opening|number))\b)/i)[0] ?? raw;
+  const cleaned = clipped.replace(/\s+(invites|has invited|for the|under the)$/i, "").trim();
+  if (cleaned.length < 4 || cleaned.length > 160) return null;
   if (!/[A-Za-z]/.test(cleaned)) return null;
   return cleaned;
 }
@@ -193,6 +199,8 @@ export type ExtractedTenderFacts = {
   registrations: string[];
   location: string | null;
   scope: string | null;
+  quantity: number | null;
+  office: string | null;
   msmePreference: boolean | null;
   startupPreference: boolean | null;
   status: string | null;
@@ -208,7 +216,13 @@ export function extractFacts(input: {
 }): ExtractedTenderFacts {
   const text = normalizeExtractionText(input.text);
   const requirements: RequirementDraft[] = [];
-  const push = (draft: RequirementDraft) => requirements.push(draft);
+  const push = (draft: RequirementDraft, at?: number) => {
+    requirements.push({
+      ...draft,
+      page: draft.page ?? (at == null ? null : pageAt(text, at)),
+      evidenceText: draft.evidenceText ? cleanPassage(draft.evidenceText) : draft.evidenceText,
+    });
+  };
 
   const closing = firstLabeledDate(text, "closing");
   const opening = firstLabeledDate(text, "opening");
@@ -226,10 +240,10 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: evidenceFor(input.authority, input.fromPage, "date"),
       confidence: "high",
-    });
+    }, closing.index);
   }
 
-  const emd = moneyNear(text, /(?:earnest money(?: deposit)?|\bemd\b|ईएमडी|बयाना\s*राशि)/i);
+  const emd = moneyNear(text, /(?:earnest money(?: deposit)?|\bemd(?:\s+amount|\s+detail)?|\bemd\b|ईएमडी|बयाना\s*राशि)/i);
   if (emd) {
     push({
       type: "emd",
@@ -243,10 +257,10 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: evidenceFor(input.authority, input.fromPage, "money"),
       confidence: "high",
-    });
+    }, emd.index);
   }
 
-  const turnover = moneyNear(text, /turnover/i);
+  const turnover = moneyNear(text, /(?:average annual turnover|annual turnover|turnover)/i);
   if (turnover) {
     const mandatory = mandatoryNear(text, turnover.index);
     push({
@@ -261,10 +275,12 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: input.fromPage && input.authority === "A" ? "VERIFIED" : evidenceFor(input.authority, false, "prose"),
       confidence: input.fromPage ? "high" : "medium",
-    });
+    }, turnover.index);
   }
 
-  const experience = text.match(/(\d+)\s*\+?\s*years?(?:'|\s+of)?\s*(?:relevant\s+)?experience/i);
+  const experience =
+    text.match(/(\d+)\s*\+?\s*years?(?:'|\s+of)?\s*(?:relevant\s+)?experience/i) ??
+    text.match(/(?:years of past experience|experience required|same\/similar service)[^.\n]{0,80}?(\d+)\s*years?/i);
   let experienceYears: number | null = null;
   if (experience && experience.index != null) {
     experienceYears = Number(experience[1]);
@@ -280,7 +296,7 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: input.fromPage && input.authority === "A" ? "VERIFIED" : evidenceFor(input.authority, false, "prose"),
       confidence: "medium",
-    });
+    }, experience.index);
   }
 
   const age = text.match(/(\d+)\s+years?.{0,40}(?:existence|incorporation|in business|old)/i);
@@ -299,7 +315,7 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: input.fromPage && input.authority === "A" ? "VERIFIED" : evidenceFor(input.authority, false, "prose"),
       confidence: "medium",
-    });
+    }, age.index);
   }
 
   const certifications: string[] = [];
@@ -320,7 +336,7 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: input.fromPage && input.authority === "A" ? "VERIFIED" : evidenceFor(input.authority, false, "prose"),
       confidence: "high",
-    });
+    }, match.index);
   }
 
   for (const registration of REGISTRATIONS) {
@@ -339,7 +355,7 @@ export function extractFacts(input: {
       sourceAuthority: input.authority,
       evidenceStatus: input.fromPage && input.authority === "A" ? "VERIFIED" : evidenceFor(input.authority, false, "prose"),
       confidence: "high",
-    });
+    }, match.index);
   }
 
   const location = partyAfter(
@@ -351,7 +367,7 @@ export function extractFacts(input: {
   );
   const scope = scopeMatch?.[1]?.trim() && /[A-Za-z]/.test(scopeMatch[1]) ? scopeMatch[1].trim() : null;
 
-  const estimated = moneyNear(text, /(?:estimated (?:cost|value)|tender value|project cost)/i);
+  const estimated = moneyNear(text, /(?:estimated bid value|estimated (?:cost|value)|tender value|project cost)/i);
   const fee = moneyNear(text, /tender fee/i);
   const lower = text.toLowerCase();
   let status: string | null = null;
@@ -359,11 +375,19 @@ export function extractFacts(input: {
   else if (/\bawarded\b/.test(lower)) status = "Awarded";
   else if (/\bcorrigendum\b/.test(lower)) status = "Corrigendum noted";
 
+  const organisation = partyAfter(text, /(?:organisation|organization)(?:\s+name)?\s*[:\-]?\s*([^.;|\n]{4,120})/i);
   const buyer =
-    partyAfter(text, /(?:name of (?:the )?(?:buyer|organisation|organization)|buyer(?: name)?|issued by|invited by)\s*[:\-]?\s*([^.;|\n]{4,120})/i) ??
-    partyAfter(text, /(?:issued by|invited by)\s+([A-Za-z][^.;|\n]{4,90})/i);
-  const organisation = partyAfter(text, /(?:organisation|organization)\s*[:\-]\s*([^.;|\n]{4,120})/i);
-  const department = partyAfter(text, /(?:department|ministry)\s*[:\-]\s*([^.;|\n]{4,120})/i);
+    partyAfter(text, /(?:name of (?:the )?(?:buyer|organisation|organization)|buyer name|issued by|invited by)\s*[:\-]?\s*([^.;|\n]{4,120})/i) ??
+    partyAfter(text, /(?:issued by|invited by)\s+([A-Za-z][^.;|\n]{4,90})/i) ??
+    partyAfter(text, /\bbuyer\s*[:\-]\s*([^.;|\n]{4,120})/i) ??
+    organisation;
+  const department =
+    partyAfter(text, /department(?:\s+name)?\s*[:\-]?\s*([^.;|\n]{4,140})/i) ??
+    partyAfter(text, /ministry(?:\s*\/\s*state(?:\s+name)?)?\s*[:\-]?\s*([^.;|\n]{4,140})/i);
+  const office = partyAfter(text, /office(?:\s+name)?\s*[:\-]?\s*([^.;|\n]{4,120})/i);
+  const quantityMatch = text.match(/total quantity\s*[:\-]?\s*([\d,]+)/i);
+  const quantity = quantityMatch ? Number(quantityMatch[1].replace(/,/g, "")) : null;
+  const itemScope = partyAfter(text, /(?:item category|item description|service description|product(?:\s+name)?)\s*[:\-]?\s*([^.;|\n]{4,160})/i);
   const reference = extractReference(text);
 
   return {
@@ -374,7 +398,7 @@ export function extractFacts(input: {
     department,
     state: extractState(text),
     location,
-    scope,
+    scope: itemScope ?? scope,
     closingDate: closing?.date ?? null,
     openingDate: opening?.date ?? null,
     publicationDate: publication?.date ?? null,
@@ -386,12 +410,31 @@ export function extractFacts(input: {
     companyAgeRequirementYears: companyAge,
     certifications,
     registrations,
-    msmePreference: /msme/.test(lower) && /preference|exemption|relax/.test(lower) ? true : null,
+    quantity: Number.isFinite(quantity) ? quantity : null,
+    office,
+    msmePreference: msePreference(lower),
     startupPreference: /startup/.test(lower) && /preference|exemption|relax/.test(lower) ? true : null,
     status,
     topics: TOPICS.filter((topic) => lower.includes(topic)),
     requirements,
   };
+}
+
+function pageAt(text: string, index: number): number | null {
+  let page: number | null = null;
+  for (const match of text.slice(0, index).matchAll(/\[\[page:(\d+)\]\]/g)) page = Number(match[1]);
+  return page;
+}
+
+function cleanPassage(value: string): string {
+  return value.replace(/\[\[page:\d+\]\]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function msePreference(lower: string): boolean | null {
+  const match = lower.match(/mse(?:\s+purchase)?\s+preference\s*[:\-]?\s*(yes|no)/);
+  if (match) return match[1] === "yes";
+  if (/\b(?:msme|mse)\b/.test(lower) && /preference|exemption|relax/.test(lower)) return true;
+  return null;
 }
 
 export function topicsFromText(text: string): string[] {

@@ -23,11 +23,13 @@ import {
 } from "@/lib/tender/candidate-gate";
 import { clusterItems, dedupeKeyFor, type DedupeInput } from "@/lib/tender/dedupe";
 import { extractFacts, type RequirementDraft } from "@/lib/tender/extract";
-import { fetchPublicExcerpt } from "@/lib/tender/fetch-source";
+import { fetchPublicExcerpt, isVerifiedFetch, type SourceVerification } from "@/lib/tender/fetch-source";
 import { recordSnapshot } from "@/lib/tender/record-snapshot";
 import type { SnapshotPayload } from "@/lib/tender/snapshot";
-import { istDateKey } from "@/lib/tender/dates";
-import { jaccard, normalizeRef, normalizeUrl, titleTokens, uniqueStrings } from "@/lib/tender/text";
+import { isPastDeadline, istDateKey } from "@/lib/tender/dates";
+import { verifiedDisplayTitle } from "@/lib/tender/display-title";
+import { clusterEvidenceText } from "@/lib/tender/evidence-text";
+import { jaccard, normalizeRef, normalizeUrl, titleTokens } from "@/lib/tender/text";
 
 export type DiscoveryLogEntry = {
   engine: string;
@@ -128,7 +130,7 @@ async function storeRun(input: {
   error: string | null;
   cacheHit: boolean;
   retrievedAt: Date;
-  hits: Array<{ title: string; url: string; displayedLink: string | null; domain: string; snippet: string | null; dateText: string | null; position: number; authority: AuthorityTier; pageText: string | null; fromPage: boolean }>;
+  hits: Array<{ title: string; url: string; displayedLink: string | null; domain: string; snippet: string | null; dateText: string | null; position: number; authority: AuthorityTier; pageText: string | null; fromPage: boolean; verification?: SourceVerification }>;
 }): Promise<Sourced[]> {
   const run = await prisma.searchRun.create({
     data: {
@@ -161,7 +163,7 @@ async function storeRun(input: {
         retrievedAt: input.retrievedAt,
         engine: input.query.engine,
         authorityTier: hit.authority,
-        fetchStatus: hit.fromPage ? "verified_text" : "not_directly_verified",
+        fetchStatus: hit.verification ?? (hit.fromPage ? "VERIFIED_SOURCE" : "UNVERIFIED"),
         fetchedExcerpt: hit.pageText,
       },
     });
@@ -207,26 +209,32 @@ async function materialize(
 ): Promise<{ unique: number; relevant: number; records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }> }> {
   const clusters = clusterItems(sourced);
   let relevant = 0;
+  let uniqueActive = 0;
   const records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }> = [];
   for (const cluster of clusters) {
     const ordered = [...cluster].sort((a, b) => authorityRank(a.authority) - authorityRank(b.authority) || a.position - b.position);
     const primary = ordered[0];
-    const text = uniqueStrings(ordered.flatMap((item) => [item.pageText, item.snippet, item.title])).join("\n");
+    const verified = ordered.some((item) => item.fromPage);
+    const evidence = clusterEvidenceText(ordered);
+    const text = evidence.text;
     const facts = extractFacts({
       text,
       authority: primary.authority,
-      fromPage: ordered.some((item) => item.fromPage),
+      fromPage: verified,
       sourceUrl: primary.primarySourceUrl,
     });
-    const requirements = mergeRequirements(ordered.map((item) => extractFacts({
-      text: `${item.title}\n${item.pageText ?? item.snippet}`,
+    const title = verifiedDisplayTitle(primary.title, facts);
+    const requirementSources = verified ? ordered.filter((item) => item.fromPage) : ordered;
+    const requirements = mergeRequirements(requirementSources.map((item) => extractFacts({
+      text: item.fromPage && item.pageText ? item.pageText : `${item.title}\n${item.pageText ?? item.snippet}`,
       authority: item.authority,
       fromPage: item.fromPage,
       sourceUrl: item.primarySourceUrl,
     }).requirements).flat());
+    const verifiedPast = Boolean(verified && (primary.authority === "A" || primary.authority === "B") && facts.closingDate && isPastDeadline(facts.closingDate, new Date()));
     const evaluation = evaluateReadiness({
       company,
-      title: primary.title,
+      title,
       evidenceText: text,
       state: facts.state,
       closingDate: facts.closingDate,
@@ -246,10 +254,11 @@ async function materialize(
     const data = tenderData({
       key,
       mode,
-      title: primary.title,
+      title,
       facts,
       primary,
-      text,
+      text: text.replace(/\[\[page:\d+\]\]/g, " "),
+      closed: verifiedPast,
     });
     const tender = existing
       ? await prisma.tender.update({ where: { id: existing.id }, data })
@@ -295,8 +304,9 @@ async function materialize(
     }
     await recordSnapshot(
       tender.id,
-      snapshotFromCluster({ title: primary.title, facts, primary, text, sources: ordered }),
+      snapshotFromCluster({ title, facts, primary, text, sources: ordered }),
     );
+    if (!verifiedPast) uniqueActive += 1;
     records.push({
       id: tender.id,
       title: tender.title,
@@ -305,7 +315,7 @@ async function materialize(
     });
     if (evaluation.verdict === "BID" || evaluation.verdict === "REVIEW") relevant += 1;
   }
-  return { unique: clusters.length, relevant, records };
+  return { unique: uniqueActive, relevant, records };
 }
 
 function snapshotFromCluster(input: {
@@ -355,6 +365,7 @@ function tenderData(input: {
   facts: ReturnType<typeof extractFacts>;
   primary: Sourced;
   text: string;
+  closed?: boolean;
 }) {
   return {
     dedupeKey: input.key,
@@ -382,8 +393,8 @@ function tenderData(input: {
     certificationsRequiredJson: JSON.stringify(input.facts.certifications),
     msmePreference: input.facts.msmePreference,
     startupPreference: input.facts.startupPreference,
-    status: input.facts.status,
-    evidenceCorpus: input.text.slice(0, 12000),
+    status: input.closed ? "Closed" : input.facts.status,
+    evidenceCorpus: input.text.slice(0, 40000),
     dataMode: input.mode,
     lastCheckedAt: new Date(),
   };
@@ -401,17 +412,19 @@ function fetchRank(hit: NormalizedHit): number {
   return confidence * 100 + procurementPortalScore(hit.url, hit.domain) * 10 + hit.position;
 }
 
-async function enrichOfficialPages(hits: NormalizedHit[]): Promise<Map<string, string>> {
+async function enrichOfficialPages(hits: NormalizedHit[]): Promise<{ excerpts: Map<string, string>; verification: Map<string, SourceVerification> }> {
   const excerpts = new Map<string, string>();
+  const verification = new Map<string, SourceVerification>();
   const ranked = [...hits]
     .filter((hit) => !isNoiseDomain(hit.domain) && classifyDomain(hit.domain) !== "D")
     .sort((left, right) => fetchRank(left) - fetchRank(right))
     .slice(0, MAX_SOURCE_FETCHES);
   for (const hit of ranked) {
     const result = await fetchPublicExcerpt(hit.url);
+    verification.set(hit.url, result.verification);
     if (result.excerpt) excerpts.set(hit.url, result.excerpt);
   }
-  return excerpts;
+  return { excerpts, verification };
 }
 
 async function attachVerification(result: Omit<DiscoveryResult, "notice" | "lastVerifiedAt">): Promise<DiscoveryResult> {
@@ -499,7 +512,8 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
     });
     return decision.hitClass === "TenderCandidate" && decision.confidence !== "LOW";
   });
-  const excerpts = candidateHits.length > 0 ? await enrichOfficialPages(candidateHits) : new Map<string, string>();
+  const enriched = candidateHits.length > 0 ? await enrichOfficialPages(candidateHits) : { excerpts: new Map<string, string>(), verification: new Map<string, SourceVerification>() };
+  const excerpts = enriched.excerpts;
   const cards: Sourced[] = [];
   const newsRows: Sourced[] = [];
   const changeRows: Sourced[] = [];
@@ -523,6 +537,7 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
         authority: classifyDomain(hit.domain),
         pageText: excerpts.get(hit.url) ?? null,
         fromPage: excerpts.has(hit.url),
+        verification: excerpts.has(hit.url) ? "VERIFIED_SOURCE" : enriched.verification.get(hit.url) ?? (classifyDomain(hit.domain) === "A" || classifyDomain(hit.domain) === "B" ? "DISCOVERED_OFFICIAL" : "UNVERIFIED"),
       })),
     });
     const batchCards = rows.filter(isOpportunitySource);
@@ -724,7 +739,18 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
     );
   }
 
-  if (failures === queries.length) {
+  const direct = await fetchPublicExcerpt(tender.primarySourceUrl);
+  if (direct.excerpt) {
+    const link = tender.sources.find((item) => normalizeUrl(item.source.url) === normalizeUrl(tender.primarySourceUrl));
+    if (link) {
+      await prisma.source.update({
+        where: { id: link.source.id },
+        data: { fetchStatus: "VERIFIED_SOURCE", fetchedExcerpt: direct.excerpt },
+      });
+      link.source.fetchStatus = "VERIFIED_SOURCE";
+      link.source.fetchedExcerpt = direct.excerpt;
+    }
+  } else if (failures === queries.length) {
     return {
       ok: false,
       calledSerpApi: true,
@@ -745,7 +771,7 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
     authority: link.source.authorityTier as AuthorityTier,
     snippet: link.source.snippet ?? "",
     pageText: link.source.fetchedExcerpt,
-    fromPage: link.source.fetchStatus === "verified_text",
+    fromPage: isVerifiedFetch(link.source.fetchStatus),
     query: "",
     engine: link.source.engine,
     position: link.source.position,
@@ -764,18 +790,21 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
   }
   const ordered = [...cluster].sort((a, b) => authorityRank(a.authority) - authorityRank(b.authority) || a.position - b.position);
   const primary = ordered[0];
-  const text = uniqueStrings(ordered.flatMap((item) => [item.pageText, item.snippet, item.title])).join("\n");
+  const verified = ordered.some((item) => item.fromPage);
+  const text = clusterEvidenceText(ordered).text;
   const facts = extractFacts({
     text,
     authority: primary.authority,
-    fromPage: ordered.some((item) => item.fromPage),
+    fromPage: verified,
     sourceUrl: primary.primarySourceUrl,
   });
+  const title = verifiedDisplayTitle(primary.title || tender.title, facts);
+  const requirementSources = verified ? ordered.filter((item) => item.fromPage) : ordered;
   const requirements = mergeRequirements(
-    ordered
+    requirementSources
       .map((item) =>
         extractFacts({
-          text: `${item.title}\n${item.pageText ?? item.snippet}`,
+          text: item.fromPage && item.pageText ? item.pageText : `${item.title}\n${item.pageText ?? item.snippet}`,
           authority: item.authority,
           fromPage: item.fromPage,
           sourceUrl: item.primarySourceUrl,
@@ -783,7 +812,16 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
       )
       .flat(),
   );
-  const data = tenderData({ key: tender.dedupeKey, mode: "live", title: primary.title || tender.title, facts, primary, text });
+  const verifiedPast = Boolean(verified && (primary.authority === "A" || primary.authority === "B") && facts.closingDate && isPastDeadline(facts.closingDate, new Date()));
+  const data = tenderData({
+    key: tender.dedupeKey,
+    mode: "live",
+    title,
+    facts,
+    primary,
+    text: text.replace(/\[\[page:\d+\]\]/g, " "),
+    closed: verifiedPast,
+  });
   await prisma.tender.update({
     where: { id: tender.id },
     data: { ...data, dedupeKey: tender.dedupeKey },
@@ -809,7 +847,7 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
   }
   const evaluation = evaluateReadiness({
     company,
-    title: primary.title || tender.title,
+    title,
     evidenceText: text,
     state: facts.state,
     closingDate: facts.closingDate,
@@ -841,7 +879,7 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
   }
   const newChanges = await recordSnapshot(
     tender.id,
-    snapshotFromCluster({ title: primary.title || tender.title, facts, primary, text, sources: ordered }),
+    snapshotFromCluster({ title, facts, primary, text, sources: ordered }),
   );
   await prisma.watchlistItem.updateMany({ where: { tenderId }, data: { lastCheckedAt: new Date() } });
   return {

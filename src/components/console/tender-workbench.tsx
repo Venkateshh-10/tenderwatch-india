@@ -7,6 +7,7 @@ import { WatchButton } from "@/components/watch-button";
 import { formatDateIst, formatInr, formatIst, formatSearchParameters, orUnavailable } from "@/lib/format";
 import type { ComparisonRow } from "@/lib/readiness/evaluate";
 import { authorityLabel } from "@/lib/tender/authority";
+import { isVerifiedFetch, verificationLabel } from "@/lib/tender/fetch-source";
 import type { getTenderDetail } from "@/lib/tenders/queries";
 
 export type TenderDetail = NonNullable<Awaited<ReturnType<typeof getTenderDetail>>>;
@@ -356,10 +357,10 @@ function EvidenceBody({ detail, row }: { detail: TenderDetail; row: ComparisonRo
         {row.evidenceText || "No passage stored."}
       </blockquote>
       <dl className="space-y-1 text-[11px]">
-        <Fact label="Source" value={source?.title || "Not available"} />
+        <Fact label="Source" value={source ? evidenceSourceName(source) : "Not available"} />
         <Fact label="URL" value={row.sourceUrl || source?.url || "Not available"} href={row.sourceUrl || source?.url || undefined} />
         <Fact label="Section" value="Not available" />
-        <Fact label="Page" value="Not available" />
+        <Fact label="Page" value={row.page ? String(row.page) : "Not available"} />
         <Fact label="Authority" value={row.authority ? authorityLabel(row.authority) : "Not available"} />
         <Fact label="Retrieved" value={formatIst(source?.retrievedAt ?? detail.tender.lastCheckedAt)} />
         <Fact label="Confidence" value={requirement?.confidence || "Not available"} />
@@ -397,7 +398,7 @@ function ProvenancePanel({ detail }: { detail: TenderDetail | null }) {
           <Fact label="Source Domain" value={link.source.domain} />
           <Fact label="Source URL" value={link.source.url} href={link.source.url} />
           <Fact label="Retrieved" value={formatIst(link.source.retrievedAt)} />
-          {link.source.fetchStatus === "not_directly_verified" ? <p className="text-[11px] text-[#F59E0B]">SOURCE NOT VERIFIED</p> : null}
+          <p className={isVerifiedFetch(link.source.fetchStatus) ? "text-[11px] text-[#22C55E]" : "text-[11px] text-[#F59E0B]"}>{verificationLabel(link.source.fetchStatus)}</p>
           <details>
             <summary className="cursor-pointer text-[11px] text-[#3182F6]">View All Sources ({detail.tender.sources.length})</summary>
             <ul className="mt-1 space-y-1">
@@ -448,6 +449,11 @@ function TimeMachinePanel({ detail }: { detail: TenderDetail | null }) {
       )}
     </section>
   );
+}
+
+function evidenceSourceName(source: { title: string; domain: string; fetchStatus: string }): string {
+  if (source.domain.endsWith("gem.gov.in") && isVerifiedFetch(source.fetchStatus)) return "GeM Bid Document";
+  return source.title;
 }
 
 function Meta({ label, value }: { label: string; value: string }) {

@@ -23,4 +23,4 @@ Hard checks include turnover, company age, experience that the company cannot ha
 
 Company data may be the example SME profile. Tender facts are stored only from SerpApi results.
 
-A later check re-runs the same rules on the updated text. Time Machine does not change a verdict by itself. It only records fields that differ between snapshots.
+A later check re-runs the same rules on the updated text. When an official PDF or page is fetched, readiness is rebuilt from that text and the search snippet is not used as evidence. A verified past closing date is SKIP, the tender status becomes Closed, and the row leaves active Discover counts. Time Machine does not change a verdict by itself. It only records fields that differ between snapshots.

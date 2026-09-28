@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
     "@prisma/client",
     "better-sqlite3",
     "@prisma/adapter-better-sqlite3",
+    "pdfjs-dist",
   ],
 };
 

@@ -112,7 +112,7 @@ export function extractReference(text: string): string | null {
   if (!/\d/.test(token)) return null;
   const normalized = normalizeRef(token);
   if (normalized.length < 5) return null;
-  return token.toUpperCase();
+  return token.replace(/[.,;:]+$/, "").toUpperCase();
 }
 
 export function extractState(text: string): string | null {
@@ -272,7 +272,7 @@ export function extractFacts(input: {
   else if (/\bawarded\b/.test(lower)) status = "Awarded";
   else if (/\bcorrigendum\b/.test(lower)) status = "Corrigendum noted";
 
-  const buyerMatch = text.match(/(?:issued by|invited by)\s+([A-Z][^.\n]{4,80})/);
+  const buyerMatch = text.match(/(?:issued by|invited by)\s+([A-Za-z][^.\n]{4,80})/i);
 
   return {
     tenderReference: extractReference(text),

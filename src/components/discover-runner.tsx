@@ -79,8 +79,8 @@ export function DiscoverRunner({ liveSearch }: { liveSearch: boolean }) {
       {result && !error ? (
         <div className="mt-4 space-y-2 text-sm">
           <p>
-            {result.searchResultCount} search results · {result.uniqueOpportunities} unique opportunities ·{" "}
-            {result.relevantOpportunities} relevant opportunities
+            {result.searchResultCount} search results · {result.uniqueOpportunities} tender candidates ·{" "}
+            {result.relevantOpportunities} bid or review · {result.rejectedCount ?? 0} rejected · {result.supportingNewsCount ?? 0} news items kept as context
           </p>
           {result.notice ? (
             <p>

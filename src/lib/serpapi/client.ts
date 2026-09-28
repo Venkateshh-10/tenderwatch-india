@@ -10,7 +10,7 @@ function sanitizeMessage(message: string): string {
     .slice(0, 280);
 }
 
-export async function serpapiSearch(params: Record<string, string>): Promise<unknown> {
+export async function serpapiSearch(params: Record<string, string>, timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
   const key = process.env.SERPAPI_API_KEY?.trim();
   if (!key) {
     throw new SerpApiError("SERPAPI_API_KEY is not configured on the server.", "missing_key");
@@ -23,7 +23,7 @@ export async function serpapiSearch(params: Record<string, string>): Promise<unk
   url.searchParams.set("api_key", key);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
     const text = await response.text();

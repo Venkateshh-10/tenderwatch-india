@@ -40,28 +40,27 @@ function dedupe(queries: PlannedQuery[], cap: number): PlannedQuery[] {
   return result;
 }
 
-export function planDiscoveryQueries(company: CompanyDna): PlannedQuery[] {
+export function planDiscoveryQueries(company: CompanyDna, now = new Date()): PlannedQuery[] {
   const capability = company.capabilities[0] ?? company.industry;
   const second = company.capabilities.find((item) => item !== capability) ?? capability;
-  const technology = company.technologies[0] ?? second;
   const state = company.preferredStates[0] ?? "India";
-  const secondState = company.preferredStates[1] ?? state;
+  const year = String(now.getFullYear());
 
   const google = dedupe(
     [
-      planned("google", "official_domain", `site:gov.in "${capability}" tender ${state}`),
-      planned("google", "official_domain", `site:nic.in "${second}" "request for proposal"`),
-      planned("google", "procurement", `"notice inviting tender" "${capability}" ${state}`),
-      planned("google", "capability", `"${technology}" "notice inviting tender" ${secondState}`),
-      planned("google", "geography", `${capability} tender ${state} government`),
+      planned("google", "official_domain", `site:eprocure.gov.in "${capability}" ${state} ${year}`),
+      planned("google", "official_domain", `site:gem.gov.in "${capability}" ${state} ${year}`),
+      planned("google", "procurement", `site:gov.in "Notice Inviting Tender" "${capability}" ${state} ${year}`),
+      planned("google", "procurement", `site:nic.in "Request for Proposal" "${second}" ${year}`),
+      planned("google", "capability", `"${capability}" (tender OR RFP OR NIT) ${state} ${year}`),
     ],
     DISCOVERY_GOOGLE_CAP,
   );
 
   const news = dedupe(
     [
-      planned("google_news", "news_context", `${capability} government tender ${state} India`),
-      planned("google_news", "news_context", `${company.industry} procurement announcement India`),
+      planned("google_news", "news_context", `"${capability}" tender ${state} ${year}`),
+      planned("google_news", "news_context", `"${capability}" corrigendum ${state} ${year}`),
     ],
     DISCOVERY_NEWS_CAP,
   );

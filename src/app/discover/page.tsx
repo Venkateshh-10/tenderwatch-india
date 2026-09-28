@@ -2,12 +2,13 @@ import { DiscoverRunner } from "@/components/discover-runner";
 import { TenderCard } from "@/components/tender-card";
 import { formatIst } from "@/lib/format";
 import { serpApiKeyPresent } from "@/lib/mode";
-import { latestLiveRetrieval, listSearchRuns, listTenders } from "@/lib/tenders/queries";
+import { displayedOpportunities, latestLiveRetrieval, listSearchRuns, listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DiscoverPage() {
   const [tenders, runs, lastVerified] = await Promise.all([listTenders(), listSearchRuns(), latestLiveRetrieval()]);
+  const shown = displayedOpportunities(tenders);
   return (
     <div className="space-y-6">
       <DiscoverRunner liveSearch={serpApiKeyPresent()} />
@@ -17,7 +18,7 @@ export default async function DiscoverPage() {
         {tenders.length === 0 ? (
           <p className="text-sm text-[#5c564c]">No verified data available.</p>
         ) : (
-          tenders.map((item) => <TenderCard key={item.id} item={item} />)
+          shown.map((item) => <TenderCard key={item.id} item={item} />)
         )}
       </section>
       <section className="rounded-xl border border-[#e4dccb] bg-white p-4">

@@ -19,6 +19,8 @@ export async function POST(request: Request) {
         searchResultCount: 0,
         uniqueOpportunities: 0,
         relevantOpportunities: 0,
+        rejectedCount: 0,
+        supportingNewsCount: 0,
         error: message.slice(0, 280),
         notice: "No verified data available.",
         lastVerifiedAt: null,

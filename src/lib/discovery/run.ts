@@ -3,6 +3,7 @@ import type { CompanyDna } from "@/lib/company/types";
 import { prisma } from "@/lib/db";
 import { serpApiKeyPresent, type DataMode } from "@/lib/mode";
 import { evaluateReadiness, type Evaluation } from "@/lib/readiness/evaluate";
+import { SEARCH_TIMEOUT_MS, SEARCH_TIMEOUT_RETRY_MS } from "@/lib/search/limits";
 import { planChangeQueries, planDiscoveryQueries, type PlannedQuery } from "@/lib/search/query-planner";
 import { buildCacheKey, cacheExpiry, cacheIsFresh } from "@/lib/serpapi/cache";
 import { searchGoogle } from "@/lib/serpapi/google";
@@ -10,6 +11,7 @@ import { searchGoogleNews } from "@/lib/serpapi/news";
 import { normalizeSerpApiResults } from "@/lib/serpapi/normalize";
 import { SerpApiError, type NormalizedHit } from "@/lib/serpapi/types";
 import { authorityRank, classifyDomain, type AuthorityTier } from "@/lib/tender/authority";
+import { classifySearchHit, type HitClass, type TenderConfidence } from "@/lib/tender/candidate-gate";
 import { clusterItems, dedupeKeyFor, type DedupeInput } from "@/lib/tender/dedupe";
 import { extractFacts, type RequirementDraft } from "@/lib/tender/extract";
 import { fetchPublicExcerpt } from "@/lib/tender/fetch-source";
@@ -35,6 +37,8 @@ export type DiscoveryResult = {
   searchResultCount: number;
   uniqueOpportunities: number;
   relevantOpportunities: number;
+  rejectedCount: number;
+  supportingNewsCount: number;
   error: string | null;
   notice: string | null;
   lastVerifiedAt: string | null;
@@ -48,7 +52,13 @@ type Sourced = DedupeInput & {
   query: string;
   engine: string;
   position: number;
+  hitClass: HitClass;
+  confidence: TenderConfidence;
 };
+
+function fetchSerpPayload(query: PlannedQuery, timeoutMs: number): Promise<unknown> {
+  return query.engine === "google_news" ? searchGoogleNews(query.query, timeoutMs) : searchGoogle(query.query, 8, timeoutMs);
+}
 
 function safeError(error: unknown): string {
   if (error instanceof SerpApiError) return error.message;
@@ -71,7 +81,12 @@ async function executeLiveQuery(query: PlannedQuery, refresh: boolean): Promise<
   }
 
   try {
-    const payload = query.engine === "google_news" ? await searchGoogleNews(query.query) : await searchGoogle(query.query);
+    const payload = await fetchSerpPayload(query, SEARCH_TIMEOUT_MS).catch(async (error: unknown) => {
+      if (error instanceof SerpApiError && error.code === "timeout") {
+        return fetchSerpPayload(query, SEARCH_TIMEOUT_RETRY_MS);
+      }
+      throw error;
+    });
     const hits = normalizeSerpApiResults(query.engine, payload);
     const retrievedAt = new Date();
     await prisma.searchCache.upsert({
@@ -146,6 +161,13 @@ async function storeRun(input: {
       fromPage: hit.fromPage,
       sourceUrl: hit.url,
     });
+    const decision = classifySearchHit({
+      engine: input.query.engine,
+      title: hit.title,
+      url: hit.url,
+      domain: hit.domain,
+      snippet: `${hit.snippet ?? ""}\n${hit.pageText ?? ""}`,
+    });
     sourced.push({
       sourceId: source.id,
       title: hit.title,
@@ -161,14 +183,21 @@ async function storeRun(input: {
       query: input.query.query,
       engine: input.query.engine,
       position: hit.position,
+      hitClass: decision.hitClass,
+      confidence: decision.confidence,
     });
   }
   return sourced;
 }
 
-async function materialize(sourced: Sourced[], company: CompanyDna, mode: DataMode): Promise<{ unique: number; relevant: number }> {
+async function materialize(
+  sourced: Sourced[],
+  company: CompanyDna,
+  mode: DataMode,
+): Promise<{ unique: number; relevant: number; records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }> }> {
   const clusters = clusterItems(sourced);
   let relevant = 0;
+  const records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }> = [];
   for (const cluster of clusters) {
     const ordered = [...cluster].sort((a, b) => authorityRank(a.authority) - authorityRank(b.authority) || a.position - b.position);
     const primary = ordered[0];
@@ -257,9 +286,15 @@ async function materialize(sourced: Sourced[], company: CompanyDna, mode: DataMo
       tender.id,
       snapshotFromCluster({ title: primary.title, facts, primary, text, sources: ordered }),
     );
+    records.push({
+      id: tender.id,
+      title: tender.title,
+      tenderReference: tender.tenderReference,
+      buyer: tender.buyer,
+    });
     if (evaluation.verdict === "BID" || evaluation.verdict === "REVIEW") relevant += 1;
   }
-  return { unique: clusters.length, relevant };
+  return { unique: clusters.length, relevant, records };
 }
 
 function snapshotFromCluster(input: {
@@ -383,12 +418,13 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
       searchResultCount: 0,
       uniqueOpportunities: 0,
       relevantOpportunities: 0,
+      rejectedCount: 0,
+      supportingNewsCount: 0,
       error: "Live search unavailable.",
     });
   }
 
   let failures = 0;
-  const sourced: Sourced[] = [];
   const liveHits: Array<{ query: PlannedQuery; hits: NormalizedHit[]; retrievedAt: Date; cacheHit: boolean }> = [];
   for (const query of planned) {
     const outcome = await executeLiveQuery(query, refresh);
@@ -427,7 +463,20 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
   }
 
   const allHits = liveHits.flatMap((item) => item.hits);
-  const excerpts = allHits.length > 0 ? await enrichOfficialPages(allHits) : new Map<string, string>();
+  const candidateHits = allHits.filter((hit) => {
+    const decision = classifySearchHit({
+      engine: hit.engine,
+      title: hit.title,
+      url: hit.url,
+      domain: hit.domain,
+      snippet: hit.snippet,
+    });
+    return decision.hitClass === "TenderCandidate" && decision.confidence !== "LOW";
+  });
+  const excerpts = candidateHits.length > 0 ? await enrichOfficialPages(candidateHits) : new Map<string, string>();
+  const cards: Sourced[] = [];
+  const newsRows: Sourced[] = [];
+  let rejectedCount = 0;
   for (const batch of liveHits) {
     const rows = await storeRun({
       query: batch.query,
@@ -449,10 +498,19 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
         fromPage: excerpts.has(hit.url),
       })),
     });
-    sourced.push(...rows);
+    const batchCards = rows.filter(isOpportunitySource);
+    const batchNews = rows.filter((row) => row.hitClass === "SupportingNews");
+    const batchRejected = rows.length - batchCards.length - batchNews.length;
+    cards.push(...batchCards);
+    newsRows.push(...batchNews);
+    rejectedCount += batchRejected;
+    const entry = log.find((item) => item.query === batch.query.query && item.engine === batch.query.engine && item.status === "success");
+    if (entry) {
+      entry.message = `${batchCards.length} tender candidates, ${batchNews.length} supporting news, ${batchRejected} rejected. ${entry.message ?? ""}`.trim();
+    }
   }
 
-  if (sourced.length === 0) {
+  if (allHits.length === 0) {
     return attachVerification({
       mode,
       log,
@@ -460,20 +518,58 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
       searchResultCount: 0,
       uniqueOpportunities: 0,
       relevantOpportunities: 0,
+      rejectedCount: 0,
+      supportingNewsCount: 0,
       error: failures > 0 ? log.find((entry) => entry.message)?.message ?? "Live search unavailable." : null,
     });
   }
 
-  const counts = await materialize(sourced, company, "live");
+  const counts = cards.length > 0 ? await materialize(cards, company, "live") : { unique: 0, relevant: 0, records: [] };
+  await attachSupportingNews(counts.records, newsRows);
   return attachVerification({
     mode,
     log,
     planned,
-    searchResultCount: sourced.length,
+    searchResultCount: allHits.length,
     uniqueOpportunities: counts.unique,
     relevantOpportunities: counts.relevant,
+    rejectedCount,
+    supportingNewsCount: newsRows.length,
     error: failures === planned.length ? "Live search unavailable." : null,
   });
+}
+
+function isOpportunitySource(row: Sourced): boolean {
+  return row.hitClass === "TenderCandidate" && row.confidence !== "LOW";
+}
+
+function classifiedSource(engine: string, title: string, url: string, domain: string, snippet: string | null): Pick<Sourced, "hitClass" | "confidence"> {
+  const decision = classifySearchHit({ engine, title, url, domain, snippet });
+  return { hitClass: decision.hitClass, confidence: decision.confidence };
+}
+
+function newsSupportsTender(news: Sourced, tender: { title: string; tenderReference: string | null; buyer: string | null }): boolean {
+  const blob = `${news.title}\n${news.snippet}\n${news.pageText ?? ""}`.toLowerCase();
+  const reference = tender.tenderReference?.trim();
+  if (reference && reference.length >= 5 && blob.includes(reference.toLowerCase())) return true;
+  const buyer = tender.buyer?.trim();
+  if (buyer && buyer.length >= 8 && blob.includes(buyer.toLowerCase())) return true;
+  return jaccard(titleTokens(news.title), titleTokens(tender.title)) >= 0.45;
+}
+
+async function attachSupportingNews(
+  records: Array<{ id: string; title: string; tenderReference: string | null; buyer: string | null }>,
+  news: Sourced[],
+) {
+  for (const item of news) {
+    const match = records.find((record) => newsSupportsTender(item, record));
+    if (!match) continue;
+    await prisma.tenderSource.upsert({
+      where: { tenderId_sourceId: { tenderId: match.id, sourceId: item.sourceId } },
+      create: { tenderId: match.id, sourceId: item.sourceId, role: "supporting" },
+      update: { role: "supporting" },
+    });
+  }
 }
 
 export type RefreshResult = {
@@ -545,7 +641,11 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
         fromPage: false,
       })),
     });
-    matched.push(...rows);
+    matched.push(...rows.filter(isOpportunitySource));
+    await attachSupportingNews(
+      [{ id: tender.id, title: tender.title, tenderReference: tender.tenderReference, buyer: tender.buyer }],
+      rows.filter((row) => row.hitClass === "SupportingNews"),
+    );
   }
 
   if (failures === queries.length) {
@@ -573,8 +673,19 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
     query: "",
     engine: link.source.engine,
     position: link.source.position,
+    ...classifiedSource(link.source.engine, link.source.title, link.source.url, link.source.domain, link.source.snippet),
   }));
-  const cluster = [...previousSources, ...matched];
+  const cluster = [...previousSources.filter(isOpportunitySource), ...matched];
+  if (cluster.length === 0) {
+    await prisma.watchlistItem.updateMany({ where: { tenderId }, data: { lastCheckedAt: new Date() } });
+    return {
+      ok: true,
+      calledSerpApi: true,
+      message: "No verified change detected.",
+      newChanges: [],
+      error: null,
+    };
+  }
   const ordered = [...cluster].sort((a, b) => authorityRank(a.authority) - authorityRank(b.authority) || a.position - b.position);
   const primary = ordered[0];
   const text = uniqueStrings(ordered.flatMap((item) => [item.pageText, item.snippet, item.title])).join("\n");

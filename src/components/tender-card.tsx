@@ -38,8 +38,9 @@ export function TenderCard({ item }: { item: TenderListItem }) {
         <div>
           <dt className="text-[#5c564c]">Evidence</dt>
           <dd>
-            {item.sourceCount} supporting source{item.sourceCount === 1 ? "" : "s"} · {authorityLabel(item.authority)}
-            {item.hasNews ? " · includes Google News" : ""}
+            {item.sourceCount} supporting source{item.sourceCount === 1 ? "" : "s"} · {authorityLabel(item.authority)} ·{" "}
+            {item.confidence} confidence
+            {item.hasNews ? " · includes Google News as context" : ""}
           </dd>
         </div>
         <div>

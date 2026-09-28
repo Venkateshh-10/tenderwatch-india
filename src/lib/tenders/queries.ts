@@ -1,6 +1,8 @@
 import type { ComparisonRow, MatchReason, Verdict } from "@/lib/readiness/evaluate";
 import { prisma } from "@/lib/db";
 import type { DataMode } from "@/lib/mode";
+import { OPPORTUNITY_DISPLAY_CAP } from "@/lib/search/limits";
+import { isDiscoverOpportunity, type TenderConfidence } from "@/lib/tender/candidate-gate";
 
 const LIVE: DataMode = "live";
 
@@ -25,6 +27,7 @@ export type TenderListItem = {
   strongMatches: number;
   changed: boolean;
   hasNews: boolean;
+  confidence: TenderConfidence;
 };
 
 function parseArray(value: string | null | undefined): string[] {
@@ -37,9 +40,14 @@ function parseArray(value: string | null | undefined): string[] {
   }
 }
 
-function rankValue(item: Pick<TenderListItem, "verdict" | "strongMatches">): number {
+function rankValue(item: Pick<TenderListItem, "verdict" | "strongMatches" | "confidence">): number {
   const verdict = item.verdict === "BID" ? 3 : item.verdict === "REVIEW" ? 2 : item.verdict === "SKIP" ? 1 : 0;
-  return verdict * 100 + item.strongMatches * 10;
+  const confidence = item.confidence === "HIGH" ? 2 : item.confidence === "MEDIUM" ? 1 : 0;
+  return confidence * 1000 + verdict * 100 + item.strongMatches * 10;
+}
+
+export function displayedOpportunities(items: TenderListItem[]): TenderListItem[] {
+  return items.slice(0, OPPORTUNITY_DISPLAY_CAP);
 }
 
 export async function listTenders(): Promise<TenderListItem[]> {
@@ -51,11 +59,25 @@ export async function listTenders(): Promise<TenderListItem[]> {
       _count: { select: { sources: true, changes: true } },
     },
   });
-  const items = tenders.map((tender) => {
+  const items = tenders.flatMap((tender) => {
+    const engines = tender.sources.map((link) => link.source.engine);
+    const snippet = tender.scope ?? tender.evidenceCorpus;
+    if (
+      !isDiscoverOpportunity({
+        title: tender.title,
+        url: tender.primarySourceUrl,
+        domain: tender.primarySourceDomain,
+        snippet,
+        engines,
+      })
+    ) {
+      return [];
+    }
     const evaluation = tender.evaluations[0];
     const blockers = parseArray(evaluation?.blockersJson);
     const matches = evaluation ? (JSON.parse(evaluation.matchJson) as MatchReason[]) : [];
-    return {
+    const decisionConfidence: TenderConfidence = tender.primaryAuthorityTier === "A" || tender.primaryAuthorityTier === "B" ? "HIGH" : "MEDIUM";
+    return [{
       id: tender.id,
       title: tender.title,
       buyer: tender.buyer,
@@ -76,7 +98,8 @@ export async function listTenders(): Promise<TenderListItem[]> {
       strongMatches: matches.filter((item) => item.strength === "Strong").length,
       changed: tender._count.changes > 0,
       hasNews: tender.sources.some((link) => link.source.engine === "google_news"),
-    };
+      confidence: decisionConfidence,
+    }];
   });
   return items.sort((a, b) => {
     const rank = rankValue(b) - rankValue(a);
@@ -104,6 +127,18 @@ export async function getTenderDetail(id: string) {
     },
   });
   if (!tender || tender.dataMode !== LIVE) return null;
+  const engines = tender.sources.map((link) => link.source.engine);
+  if (
+    !isDiscoverOpportunity({
+      title: tender.title,
+      url: tender.primarySourceUrl,
+      domain: tender.primarySourceDomain,
+      snippet: tender.scope ?? tender.evidenceCorpus,
+      engines,
+    })
+  ) {
+    return null;
+  }
   const evaluation = tender.evaluations[0];
   const rows: ComparisonRow[] = evaluation ? (JSON.parse(evaluation.rowsJson) as ComparisonRow[]) : [];
   const matches: MatchReason[] = evaluation ? (JSON.parse(evaluation.matchJson) as MatchReason[]) : [];

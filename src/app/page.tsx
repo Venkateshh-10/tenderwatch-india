@@ -4,18 +4,20 @@ import { VerdictChart } from "@/components/verdict-chart";
 import { getCompany } from "@/lib/company/store";
 import { formatInr, formatIst } from "@/lib/format";
 import { serpApiKeyPresent } from "@/lib/mode";
-import { countChangedTenders, dashboardCounts, latestLiveRetrieval, listRecentChanges, listTenders, tendersClosingThisWeek, type TenderListItem } from "@/lib/tenders/queries";
+import { dashboardCounts, displayedOpportunities, latestLiveRetrieval, listRecentChanges, listTenders, tendersClosingThisWeek, type TenderListItem } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [company, tenders, changed, recentChanges, lastVerified] = await Promise.all([
+  const [company, tenders, recentChanges, lastVerified] = await Promise.all([
     getCompany(),
     listTenders(),
-    countChangedTenders(),
-    listRecentChanges(),
+    listRecentChanges(12),
     latestLiveRetrieval(),
   ]);
+  const shown = displayedOpportunities(tenders);
+  const changed = tenders.filter((item) => item.changed).length;
+  const visibleChanges = recentChanges.filter((change) => tenders.some((item) => item.id === change.tender.id)).slice(0, 5);
   const counts = dashboardCounts(tenders);
   const closingSoon = tendersClosingThisWeek(tenders);
   const metrics = [
@@ -54,9 +56,9 @@ export default async function DashboardPage() {
             {lastVerified ? ` Last successful SerpApi retrieval: ${formatIst(lastVerified)}.` : ""}
           </p>
           <VerdictChart bid={counts.bid} review={counts.review} skip={counts.skip} changed={changed} />
-          {recentChanges.length > 0 ? (
+          {visibleChanges.length > 0 ? (
             <ul className="mt-2 space-y-2 text-sm">
-              {recentChanges.map((change) => (
+              {visibleChanges.map((change) => (
                 <li key={change.id}>
                   <Link href={`/tenders/${change.tender.id}`} className="underline">
                     {change.tender.title}
@@ -85,13 +87,13 @@ export default async function DashboardPage() {
       )}
       {tenders.length > 0 ? (
         <div className="grid gap-6">
-          <TenderSection title="Best matches" items={tenders.filter((item) => item.verdict === "BID")} empty="No BID notices stored." />
-          <TenderSection title="Needs review" items={tenders.filter((item) => item.verdict === "REVIEW")} empty="No REVIEW notices stored." />
-          <TenderSection title="Closing soon" items={closingSoon} empty="No stored notice closes in the next seven days." />
-          <TenderSection title="Changed" items={tenders.filter((item) => item.changed)} empty="No verified change detected." />
+          <TenderSection title="Best matches" items={shown.filter((item) => item.verdict === "BID")} empty="No BID notices in the top validated results." />
+          <TenderSection title="Needs review" items={shown.filter((item) => item.verdict === "REVIEW")} empty="No REVIEW notices in the top validated results." />
+          <TenderSection title="Closing soon" items={shown.filter((item) => closingSoon.some((notice) => notice.id === item.id))} empty="No stored notice in this set closes in the next seven days." />
+          <TenderSection title="Changed" items={shown.filter((item) => item.changed)} empty="No verified change detected." />
           <TenderSection
             title="Recently discovered"
-            items={[...tenders].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 4)}
+            items={[...shown].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 4)}
             empty="No live notices stored yet."
           />
         </div>

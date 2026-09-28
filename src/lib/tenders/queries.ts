@@ -28,6 +28,8 @@ export type TenderListItem = {
   changed: boolean;
   hasNews: boolean;
   confidence: TenderConfidence;
+  matchLabels: string[];
+  watched: boolean;
 };
 
 function parseArray(value: string | null | undefined): string[] {
@@ -56,6 +58,7 @@ export async function listTenders(): Promise<TenderListItem[]> {
     include: {
       evaluations: { orderBy: { evaluatedAt: "desc" }, take: 1 },
       sources: { include: { source: { select: { engine: true } } } },
+      watch: { select: { id: true } },
       _count: { select: { sources: true, changes: true } },
     },
   });
@@ -99,6 +102,8 @@ export async function listTenders(): Promise<TenderListItem[]> {
       changed: tender._count.changes > 0,
       hasNews: tender.sources.some((link) => link.source.engine === "google_news"),
       confidence: decisionConfidence,
+      matchLabels: matches.slice(0, 4).map((item) => item.label),
+      watched: Boolean(tender.watch),
     }];
   });
   return items.sort((a, b) => {
@@ -199,6 +204,28 @@ function inClosingWindow(item: TenderListItem, now: number): boolean {
 export function tendersClosingThisWeek(items: TenderListItem[]): TenderListItem[] {
   const now = Date.now();
   return items.filter((item) => inClosingWindow(item, now));
+}
+
+export async function searchActivity() {
+  const [executed, success, google, news] = await Promise.all([
+    prisma.searchRun.count({ where: { dataMode: LIVE } }),
+    prisma.searchRun.aggregate({
+      where: { dataMode: LIVE, status: "success" },
+      _sum: { resultCount: true },
+    }),
+    prisma.searchRun.count({ where: { dataMode: LIVE, status: "success", engine: "google" } }),
+    prisma.searchRun.count({ where: { dataMode: LIVE, status: "success", engine: "google_news" } }),
+  ]);
+  return {
+    executed,
+    rawResults: success._sum.resultCount ?? 0,
+    searchedGoogle: google > 0,
+    searchedNews: news > 0,
+  };
+}
+
+export async function countWatchlist(): Promise<number> {
+  return prisma.watchlistItem.count({ where: { tender: { dataMode: LIVE } } });
 }
 
 export function dashboardCounts(items: TenderListItem[]) {

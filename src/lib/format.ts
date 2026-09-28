@@ -51,3 +51,17 @@ export function orUnavailable(value: string | null | undefined): string {
   if (!value || !value.trim()) return "Not available";
   return value.trim();
 }
+
+export function formatSearchParameters(raw: string | null | undefined): string {
+  if (!raw || !raw.trim()) return "Not available";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return raw.trim();
+    const parts = Object.entries(parsed as Record<string, unknown>)
+      .filter(([, value]) => value != null && value !== "")
+      .map(([key, value]) => `${key}=${String(value)}`);
+    return parts.length > 0 ? parts.join(" · ") : "Not available";
+  } catch {
+    return raw.trim();
+  }
+}

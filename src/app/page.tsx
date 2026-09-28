@@ -111,11 +111,12 @@ function ResultsPanel({
 
   return (
     <section className="flex h-full min-h-0 flex-col rounded-md border border-border bg-card p-3">
-      <SectionHeading n={3} title="Discovery Results" action={<ResultsToolbar query={query} />} />
+      <SectionHeading n={3} title="Discovery Results" />
       <p className="mt-1 text-[11px] text-muted-foreground">
         {raw} raw results · {unique} unique opportunities · {relevant} relevant matches
       </p>
-      <div className="mt-2 flex gap-1 overflow-x-auto">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-1 overflow-x-auto">
         {tabs.map(([id, label, count]) => {
           const active = (query.tab || "all") === id;
           return (
@@ -132,6 +133,8 @@ function ResultsPanel({
             </Link>
           );
         })}
+        </div>
+        <ResultsToolbar query={query} />
       </div>
       <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto xl:max-h-[420px]">
         {items.length === 0 ? (

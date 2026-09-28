@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
-import { currentDataMode } from "@/lib/mode";
+import { serpApiKeyPresent } from "@/lib/mode";
 import "./globals.css";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
@@ -14,11 +14,10 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
-  const mode = currentDataMode();
   return (
     <html lang="en" className={`${geist.variable} h-full antialiased`}>
       <body className="min-h-full font-sans">
-        <AppShell mode={mode}>{children}</AppShell>
+        <AppShell liveSearch={serpApiKeyPresent()}>{children}</AppShell>
       </body>
     </html>
   );

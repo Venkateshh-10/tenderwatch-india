@@ -1,74 +1,66 @@
 # TenderWatch India
 
-Find the right government opportunity. Know if you qualify. See the evidence.
+**Search-native tender intelligence and evidence-backed bid readiness for Indian SMEs.**
 
-TenderWatch is search-native tender intelligence for Indian SMEs. It plans queries from a company profile, discovers public notices, and turns the evidence it can actually read into a BID, REVIEW, or SKIP decision.
+Find the right government opportunity. Know if you qualify. See the evidence. Never miss a change.
 
 ## Problem
 
-Finding a tender is not the same as knowing whether a small company can pursue it. Notices are scattered across government sites, departments, and news. Eligibility rules are easy to miss, and a listing alone does not say whether turnover, certifications, EMD, or the closing date block a bid.
+Finding tenders is not enough. Notices are scattered across government sites, departments, and news. An SME still has to decide whether turnover, certifications, EMD, experience, and the closing date actually allow a bid, and whether the notice changed after they found it.
 
 ## Solution
 
-TenderWatch connects four steps:
+```text
+Company DNA
+→ Live SerpApi
+→ Real tender
+→ Evidence
+→ Eligibility
+→ BID / REVIEW / SKIP
+→ Monitor changes
+```
 
-1. Company DNA describes what the business can do and what it will not accept.
-2. A query planner builds a short set of Google Search and Google News queries.
-3. Results are normalized, deduplicated, and checked for requirements that are actually present in the text.
-4. A deterministic readiness engine returns BID, REVIEW, or SKIP with the evidence beside the decision.
+TenderWatch plans searches from one company profile, retrieves public Google Search and Google News results through SerpApi, and turns the text it can actually read into a deterministic BID, REVIEW, or SKIP. Unknown facts stay unknown.
 
-## Live and demo modes
+## Why this is different
 
-- **Live.** If `SERPAPI_API_KEY` is set in `.env.local`, Discover calls SerpApi. Only those responses are stored as live notices.
-- **Demo.** If the key is missing, the app does not invent a live search. It shows labeled fixtures so the decision workflow can be reviewed. Demo records use `demo.tenderwatch.invalid` and are stored separately from live rows.
+Existing platforms often focus on portal aggregation, alerts, and summaries.
 
-A failed live search does not fall back to demo data.
+TenderWatch focuses on dynamic live search, search provenance, requirement-level evidence, deterministic readiness, and change reconstruction. It does not claim to be the first AI tender platform.
 
 ## Why SerpApi
 
-SerpApi is the live discovery layer. The app does not scrape GeM or CPPP logins.
+SerpApi is the live sensing layer. TenderWatch does not log in to GeM or CPPP.
 
-### Google Search
-
-Finds indexed tender notices and official pages with India-focused parameters (`gl=in`, `hl=en`, `google.co.in`).
-
-### Google News
-
-Finds announcement and context items. News stays supporting evidence unless the text itself is an authoritative notice.
-
-### Query planner
-
-Builds a capped set of searches from Company DNA: official domains, procurement phrases, capability terms, geography, and one or two news queries. Discovery stays around 5 Google searches and 2 news searches.
-
-### Search provenance
-
-Every stored result keeps the engine, query, localization, position, domain, and retrieval time. Demo rows say SerpApi was not called.
+- **Google Search** finds indexed notices, RFPs, EOIs, NITs, exact references, corrigenda, amendments, extensions, and cancellations. Parameters are `gl=in`, `hl=en`, and `google.co.in`.
+- **Google News** finds procurement announcements and context. A news item supports a notice. It does not become a hard eligibility fact by itself.
+- **Query planner** builds about 5 Google searches and 2 news searches from Company DNA, then drops duplicates.
+- **Change search** re-queries a watched notice by reference, corrigendum language, and one news query. Refresh bypasses the cache.
+- **Search provenance** stores the engine, query, parameters, position, domain, URL, and retrieval time on every result.
 
 ## Architecture
 
 ```text
 Company DNA
     ↓
-Query Planner
+Query planner
     ↓
-SerpApi (or labeled demo fixtures when no key is set)
+SerpApi Google Search + Google News
     ↓
-Normalization
+Normalize, classify authority, dedupe
     ↓
-Deduplication
+Extract requirements that the text actually states
     ↓
-Evidence extraction
-    ↓
-Readiness engine
+Deterministic readiness
     ↓
 BID / REVIEW / SKIP
     ↓
-Snapshots and Time Machine
+Snapshot diff (Time Machine)
     ↓
 Evidence graph
 ```
 
-Check for updates stores a snapshot and records a change only when a later snapshot differs. The evidence graph is drawn from stored buyer, department, official sources, change keywords, and notices with the same buyer.
+A failed search says `Live search unavailable.` If an earlier successful SerpApi run is stored, the desk says `Showing last verified live result` with that timestamp. If nothing has been retrieved, it says `No verified data available.` Sample tenders are not used.
 
 ## Setup
 
@@ -93,7 +85,7 @@ npx prisma migrate dev
 npm run dev
 ```
 
-Open the local URL Next prints. Company DNA is prefilled with an example SME, Acme Vision Systems Pvt Ltd. That profile is user input, not tender data.
+Open the local URL Next prints. Company DNA starts with an example SME, Acme Vision Systems Pvt Ltd. That profile is company input, not a tender.
 
 ## Scripts
 
@@ -104,6 +96,10 @@ npm test
 npm run build
 ```
 
+## Live-data policy
+
+Every notice on screen comes from a SerpApi response that was stored. Eligibility facts keep an evidence status: VERIFIED, SUPPORTED, UNVERIFIED, or UNKNOWN. A change appears only when two stored snapshots differ. The first snapshot is a baseline, not a change.
+
 ## Security
 
 The SerpApi key is read only on the server. Do not create `NEXT_PUBLIC_SERPAPI_API_KEY`. `.env`, `.env.local`, and SQLite files are gitignored. `.env.example` contains empty placeholders.
@@ -112,18 +108,22 @@ The app does not log in to government portals, bypass access controls, or submit
 
 ## Testing
 
-Unit tests cover query caps, source classification, deduplication, deadline comparison, turnover, certification, company age, and EMD blockers, unknown evidence, SerpApi payload normalization, cache keys, snapshot diffs, and the evidence graph. Tests use captured structures in the test file. They do not call SerpApi and are not shown in the product UI.
+Unit tests cover query caps, source classification, deduplication, deadline comparison, turnover, certification, company age, EMD blockers, unknown evidence, SerpApi payload normalization, cache keys, snapshot diffs, buyer extraction, and the evidence graph. Tests use captured structures in the test file. They do not call SerpApi and are not shown in the product.
 
 ## Limitations
 
-- Search visibility depends on what search engines have indexed.
+- Search visibility depends on what Google has indexed.
 - TenderWatch is decision support. The official tender document remains authoritative.
-- Missing evidence stays UNKNOWN or REVIEW. The app does not fill gaps with guesses.
-- TenderWatch does not submit bids.
+- Missing evidence stays UNKNOWN or REVIEW. The app does not fill gaps.
 - Snippet-only facts are treated more cautiously than text fetched from a public page.
-- Demo checks do not call SerpApi and do not invent a deadline, corrigendum, or source. Live checks bypass the cache, use at most four change queries, and keep only hits that match the notice.
-- The evidence graph does not add a node that is not present in stored fields. Demo fixtures are not labeled as official announcements.
+- A page that cannot be fetched is marked SOURCE NOT VERIFIED.
+- Time Machine stays empty until a later live check actually differs.
+- TenderWatch does not submit bids.
 
 ## AI disclosure
 
 This repository was built with Cursor, using the Grok 4.7 coding agent. The running application does not call an LLM. Eligibility decisions are deterministic rules. `OPENAI_API_KEY` is unused.
+
+## Recording
+
+See `docs/DEMO_SCRIPT.md` for the three-minute live path. Do not invent a corrigendum for the recording.

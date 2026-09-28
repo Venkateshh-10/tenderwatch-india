@@ -12,10 +12,10 @@ const LINKS = [
 ];
 
 export function AppShell({
-  mode,
+  liveSearch,
   children,
 }: {
-  mode: "live" | "demo";
+  liveSearch: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -27,7 +27,7 @@ export function AppShell({
             <Link href="/" className="font-serif text-xl tracking-tight text-[#16302b]">
               TenderWatch India
             </Link>
-            <p className="text-sm text-[#5c564c]">Find the right government opportunity. Know if you qualify.</p>
+            <p className="text-sm text-[#5c564c]">Find the right government opportunity. Know if you qualify. See the evidence.</p>
           </div>
           <nav className="flex gap-1 overflow-x-auto text-sm">
             {LINKS.map((link) => {
@@ -47,11 +47,11 @@ export function AppShell({
             })}
           </nav>
         </div>
-        <div className={cn("px-4 py-2 text-sm", mode === "live" ? "bg-[#e7f2ec] text-[#145239]" : "bg-[#f3e6c8] text-[#6a4b12]")}>
+        <div className={cn("px-4 py-2 text-sm", liveSearch ? "bg-[#e7f2ec] text-[#145239]" : "bg-[#f3e6c8] text-[#6a4b12]")}>
           <div className="mx-auto max-w-6xl">
-            {mode === "live"
-              ? "Live mode. Discovery calls SerpApi with the server-side key and stores only those results."
-              : "Demo mode. SERPAPI_API_KEY is not set, so these notices are fixtures. They are not live tenders and SerpApi was not called."}
+            {liveSearch
+              ? "Live search. TenderWatch builds Google Search and Google News queries through SerpApi and stores only those results."
+              : "Live search unavailable. Add SERPAPI_API_KEY to .env.local. The desk stays empty until a real SerpApi result is stored."}
           </div>
         </div>
       </header>

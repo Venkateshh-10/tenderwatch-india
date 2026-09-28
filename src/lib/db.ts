@@ -8,7 +8,7 @@ function sqliteFileUrl(): string {
   const filePath = raw.slice("file:".length);
   if (!filePath || filePath === ":memory:") return raw;
   if (path.isAbsolute(filePath)) return `file:${filePath}`;
-  return `file:${path.join(process.cwd(), filePath)}`;
+  return `file:${path.join(/*turbopackIgnore: true*/ process.cwd(), filePath)}`;
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };

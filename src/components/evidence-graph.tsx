@@ -13,15 +13,7 @@ type NodeData = {
   url?: string;
 };
 
-export function EvidenceGraph({
-  nodes,
-  edges,
-  demo,
-}: {
-  nodes: EvidenceNode[];
-  edges: EvidenceEdge[];
-  demo: boolean;
-}) {
+export function EvidenceGraph({ nodes, edges }: { nodes: EvidenceNode[]; edges: EvidenceEdge[] }) {
   const [selected, setSelected] = useState<NodeData | null>(null);
   const flowNodes = useMemo<Node<NodeData>[]>(
     () =>
@@ -56,7 +48,6 @@ export function EvidenceGraph({
     <div className="space-y-3">
       <p className="text-sm text-[#5c564c]">
         Nodes come from stored buyer, department, official sources, change evidence, and notices with the same buyer.
-        {demo ? " Demo fixtures are not shown as official announcements." : ""}
       </p>
       <div className="h-[420px] overflow-hidden rounded-lg border border-[#e4dccb]">
         <ReactFlow
@@ -82,7 +73,7 @@ export function EvidenceGraph({
                 Open related notice
               </Link>
             ) : null}
-            {selected.url && !selected.url.startsWith("/") && !demo ? (
+            {selected.url && !selected.url.startsWith("/") ? (
               <a className="underline" href={selected.url} target="_blank" rel="noreferrer">
                 Open source
               </a>

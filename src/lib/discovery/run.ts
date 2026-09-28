@@ -1,8 +1,7 @@
 import { getCompany } from "@/lib/company/store";
 import type { CompanyDna } from "@/lib/company/types";
 import { prisma } from "@/lib/db";
-import { DEMO_FIXTURES } from "@/lib/demo/fixtures";
-import { currentDataMode, type DataMode } from "@/lib/mode";
+import { serpApiKeyPresent, type DataMode } from "@/lib/mode";
 import { evaluateReadiness, type Evaluation } from "@/lib/readiness/evaluate";
 import { planChangeQueries, planDiscoveryQueries, type PlannedQuery } from "@/lib/search/query-planner";
 import { buildCacheKey, cacheExpiry, cacheIsFresh } from "@/lib/serpapi/cache";
@@ -22,7 +21,7 @@ import { jaccard, normalizeUrl, titleTokens, uniqueStrings } from "@/lib/tender/
 export type DiscoveryLogEntry = {
   engine: string;
   query: string;
-  status: "success" | "error" | "demo";
+  status: "success" | "error";
   resultCount: number;
   cacheHit: boolean;
   retrievedAt: string | null;
@@ -37,6 +36,8 @@ export type DiscoveryResult = {
   uniqueOpportunities: number;
   relevantOpportunities: number;
   error: string | null;
+  notice: string | null;
+  lastVerifiedAt: string | null;
 };
 
 type Sourced = DedupeInput & {
@@ -107,7 +108,7 @@ async function storeRun(input: {
 }): Promise<Sourced[]> {
   const run = await prisma.searchRun.create({
     data: {
-      engine: input.mode === "demo" ? "demo" : input.query.engine,
+      engine: input.query.engine,
       query: input.query.query,
       parameters: JSON.stringify({ ...input.query.parameters, intent: input.query.intent, dataMode: input.mode }),
       resultCount: input.hits.length,
@@ -133,7 +134,7 @@ async function storeRun(input: {
         snippet: hit.snippet,
         dateText: hit.dateText,
         retrievedAt: input.retrievedAt,
-        engine: input.mode === "demo" ? "demo" : input.query.engine,
+        engine: input.query.engine,
         authorityTier: hit.authority,
         fetchStatus: hit.fromPage ? "verified_text" : "not_directly_verified",
         fetchedExcerpt: hit.pageText,
@@ -158,7 +159,7 @@ async function storeRun(input: {
       pageText: hit.pageText,
       fromPage: hit.fromPage,
       query: input.query.query,
-      engine: input.mode === "demo" ? "demo" : input.query.engine,
+      engine: input.query.engine,
       position: hit.position,
     });
   }
@@ -166,10 +167,6 @@ async function storeRun(input: {
 }
 
 async function materialize(sourced: Sourced[], company: CompanyDna, mode: DataMode): Promise<{ unique: number; relevant: number }> {
-  if (mode === "demo") {
-    await prisma.tender.deleteMany({ where: { dataMode: "demo" } });
-  }
-
   const clusters = clusterItems(sourced);
   let relevant = 0;
   for (const cluster of clusters) {
@@ -356,77 +353,38 @@ async function enrichOfficialPages(hits: NormalizedHit[]): Promise<Map<string, s
   return excerpts;
 }
 
+async function attachVerification(result: Omit<DiscoveryResult, "notice" | "lastVerifiedAt">): Promise<DiscoveryResult> {
+  const last = await prisma.searchRun.findFirst({
+    where: { dataMode: "live", status: "success" },
+    orderBy: { retrievedAt: "desc" },
+    select: { retrievedAt: true },
+  });
+  const lastVerifiedAt = last?.retrievedAt.toISOString() ?? null;
+  const exhausted = Boolean(result.error) || result.searchResultCount === 0;
+  return {
+    ...result,
+    lastVerifiedAt,
+    notice: exhausted ? (lastVerifiedAt ? "Showing last verified live result" : "No verified data available.") : null,
+  };
+}
+
 export async function runDiscovery(options: { refresh?: boolean } = {}): Promise<DiscoveryResult> {
   const company = await getCompany();
   const planned = planDiscoveryQueries(company);
-  const mode = currentDataMode();
+  const mode: DataMode = "live";
   const refresh = Boolean(options.refresh);
   const log: DiscoveryLogEntry[] = [];
 
-  if (mode === "demo") {
-    await prisma.searchRun.deleteMany({ where: { dataMode: "demo" } });
-    for (const query of planned) {
-      log.push({
-        engine: "demo",
-        query: query.query,
-        status: "demo",
-        resultCount: 0,
-        cacheHit: false,
-        retrievedAt: null,
-        message: "Planner query only. SerpApi was not called.",
-      });
-    }
-    const sourced: Sourced[] = [];
-    for (const fixture of DEMO_FIXTURES) {
-      const query: PlannedQuery = {
-        engine: fixture.engine,
-        query: fixture.query,
-        intent: fixture.engine === "google_news" ? "news_context" : "capability",
-        parameters: { gl: "in", hl: "en" },
-      };
-      log.push({
-        engine: "demo",
-        query: fixture.query,
-        status: "demo",
-        resultCount: 1,
-        cacheHit: false,
-        retrievedAt: null,
-        message: "Demo fixture. SerpApi was not called.",
-      });
-      const rows = await storeRun({
-        query,
-        mode: "demo",
-        status: "demo",
-        error: null,
-        cacheHit: false,
-        retrievedAt: new Date(),
-        hits: [
-          {
-            title: fixture.title,
-            url: fixture.url,
-            displayedLink: fixture.domain,
-            domain: fixture.domain,
-            snippet: fixture.snippet,
-            dateText: null,
-            position: 1,
-            authority: fixture.authority,
-            pageText: fixture.pageText,
-            fromPage: true,
-          },
-        ],
-      });
-      sourced.push(...rows);
-    }
-    const counts = await materialize(sourced, company, "demo");
-    return {
+  if (!serpApiKeyPresent()) {
+    return attachVerification({
       mode,
       log,
       planned,
-      searchResultCount: sourced.length,
-      uniqueOpportunities: counts.unique,
-      relevantOpportunities: counts.relevant,
-      error: null,
-    };
+      searchResultCount: 0,
+      uniqueOpportunities: 0,
+      relevantOpportunities: 0,
+      error: "Live search unavailable.",
+    });
   }
 
   let failures = 0;
@@ -495,19 +453,19 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
   }
 
   if (sourced.length === 0) {
-    return {
+    return attachVerification({
       mode,
       log,
       planned,
       searchResultCount: 0,
       uniqueOpportunities: 0,
       relevantOpportunities: 0,
-      error: failures > 0 ? log.find((entry) => entry.message)?.message ?? "Live search unavailable." : "No verified tender data available.",
-    };
+      error: failures > 0 ? log.find((entry) => entry.message)?.message ?? "Live search unavailable." : null,
+    });
   }
 
   const counts = await materialize(sourced, company, "live");
-  return {
+  return attachVerification({
     mode,
     log,
     planned,
@@ -515,7 +473,7 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
     uniqueOpportunities: counts.unique,
     relevantOpportunities: counts.relevant,
     error: failures === planned.length ? "Live search unavailable." : null,
-  };
+  });
 }
 
 export type RefreshResult = {
@@ -533,17 +491,13 @@ export async function refreshTender(tenderId: string): Promise<RefreshResult> {
   });
   if (!tender) return { ok: false, calledSerpApi: false, message: "Notice not found.", newChanges: [], error: "Notice not found." };
 
-  const mode = currentDataMode();
-  if (mode === "demo" || tender.dataMode === "demo") {
-    const checkedAt = new Date();
-    await prisma.tender.update({ where: { id: tenderId }, data: { lastCheckedAt: checkedAt } });
-    await prisma.watchlistItem.updateMany({ where: { tenderId }, data: { lastCheckedAt: checkedAt } });
+  if (!serpApiKeyPresent() || tender.dataMode !== "live") {
     return {
-      ok: true,
+      ok: false,
       calledSerpApi: false,
-      message: "No verified change detected. SerpApi was not called.",
+      message: tender.dataMode === "live" ? "Live search unavailable." : "Notice not found.",
       newChanges: [],
-      error: null,
+      error: tender.dataMode === "live" ? "Live search unavailable." : "Notice not found.",
     };
   }
 

@@ -20,6 +20,8 @@ export async function POST(request: Request) {
         uniqueOpportunities: 0,
         relevantOpportunities: 0,
         error: message.slice(0, 280),
+        notice: "No verified data available.",
+        lastVerifiedAt: null,
       },
       { status: 500 },
     );

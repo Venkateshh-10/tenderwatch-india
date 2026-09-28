@@ -137,10 +137,10 @@ describe("serpapi normalization and cache", () => {
 });
 
 describe("mode", () => {
-  it("uses demo when the key is absent", () => {
+  it("does not switch to sample tenders when the key is absent", () => {
     const previous = process.env.SERPAPI_API_KEY;
     delete process.env.SERPAPI_API_KEY;
-    expect(currentDataMode()).toBe("demo");
+    expect(currentDataMode()).toBe("live");
     if (previous) process.env.SERPAPI_API_KEY = previous;
   });
 });

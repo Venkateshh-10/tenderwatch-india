@@ -16,16 +16,13 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
   const detail = await getTenderDetail(id);
   if (!detail) notFound();
   const { tender, evaluation, rows, matches, reasons, related } = detail;
-  const demo = tender.dataMode === "demo";
   const graph = buildEvidenceGraph({
     tenderId: tender.id,
     title: tender.title,
     buyer: tender.buyer,
     department: tender.department,
     evidenceText: tender.evidenceCorpus,
-    sources: demo
-      ? []
-      : tender.sources.map((link) => ({
+    sources: tender.sources.map((link) => ({
           id: link.source.id,
           title: link.source.title,
           url: link.source.url,
@@ -48,7 +45,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       <header className="rounded-xl border border-[#e4dccb] bg-white p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-wide text-[#5c564c]">{demo ? "Demo fixture" : "Live notice"}</p>
+            <p className="text-xs uppercase tracking-wide text-[#5c564c]">Live notice</p>
             <h1 className="font-serif text-3xl text-[#16302b]">{tender.title}</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -67,25 +64,19 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
           <Fact label="Primary source" value={tender.primarySourceDomain} />
           <Fact label="Last checked" value={formatIst(tender.lastCheckedAt)} />
         </dl>
-        {demo ? (
-          <p className="mt-3 text-sm text-[#6a4b12]">This record is a demo fixture. It was not retrieved from SerpApi.</p>
-        ) : (
-          <p className="mt-3 text-sm">
-            <a className="underline" href={tender.primarySourceUrl} target="_blank" rel="noreferrer">
-              Open source
-            </a>
-          </p>
-        )}
+        <p className="mt-3 text-sm">
+          <a className="underline" href={tender.primarySourceUrl} target="_blank" rel="noreferrer">
+            Open source
+          </a>
+        </p>
       </header>
 
       <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
         <h2 className="font-serif text-2xl">Bid readiness</h2>
         <p className="mt-1 text-sm font-medium">{evaluation?.summary ?? "Not evaluated"}</p>
-        {demo ? (
-          <p className="mt-2 text-sm text-[#6a4b12]">
-            Demo mode runs the same rules on fixture text. A status of VERIFIED means the fixture stated the fact explicitly. It does not mean a government site was checked.
-          </p>
-        ) : null}
+        <p className="mt-2 text-sm text-[#5c564c]">
+          Only a VERIFIED mandatory failure is a hard blocker. Missing text stays UNKNOWN.
+        </p>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="text-[#5c564c]">
@@ -110,20 +101,14 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       <div className="mt-2 space-y-1 text-[#3d3832]">
                         <p>Status: {row.evidenceStatus}</p>
                         <p>
-                          Authority:{" "}
-                          {demo
-                            ? "Demo fixture, not an official source"
-                            : row.authority
-                              ? authorityLabel(row.authority)
-                              : "Not available"}
+                          Authority: {row.authority ? authorityLabel(row.authority) : "Not available"}
                         </p>
                         <p>{row.evidenceText ?? "No passage stored."}</p>
-                        {row.sourceUrl && !demo ? (
+                        {row.sourceUrl ? (
                           <a className="underline" href={row.sourceUrl} target="_blank" rel="noreferrer">
                             Open source
                           </a>
                         ) : null}
-                        {demo ? <p>Demo passage. Not an official source.</p> : null}
                       </div>
                     </details>
                   </td>
@@ -155,24 +140,23 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
 
       <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
         <h2 className="font-serif text-2xl">Search provenance</h2>
+        <p className="mt-1 text-sm text-[#5c564c]">This is the exact SerpApi query that discovered the opportunity.</p>
         <ul className="mt-3 space-y-3 text-sm">
           {tender.sources.map((link) => (
             <li key={link.id} className="border-t border-[#efe8da] pt-3">
-              <p className="font-medium">{demo ? "Demo fixture · SerpApi not called" : `Google via SerpApi · ${link.source.engine}`}</p>
+              <p className="font-medium">
+                {link.source.engine === "google_news" ? "Google News via SerpApi" : "Google Search via SerpApi"}
+              </p>
               <p>{link.source.searchRun.query}</p>
               <p className="text-[#5c564c]">
                 gl=in · hl=en · position {link.source.position} · {link.source.domain} · {authorityLabel(link.source.authorityTier)} ·{" "}
                 {formatIst(link.source.retrievedAt)}
               </p>
               <p>{link.source.snippet ?? "No snippet stored."}</p>
-              {link.source.fetchStatus === "not_directly_verified" ? <p>SOURCE NOT DIRECTLY VERIFIED</p> : null}
-              {!demo ? (
-                <a className="underline" href={link.source.url} target="_blank" rel="noreferrer">
-                  {link.source.url}
-                </a>
-              ) : (
-                <p className="break-all text-[#5c564c]">{link.source.url}</p>
-              )}
+              {link.source.fetchStatus === "not_directly_verified" ? <p>SOURCE NOT VERIFIED</p> : null}
+              <a className="break-all underline" href={link.source.url} target="_blank" rel="noreferrer">
+                {link.source.url}
+              </a>
             </li>
           ))}
         </ul>
@@ -188,20 +172,16 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
           </div>
           <CheckUpdatesButton tenderId={tender.id} />
         </div>
-        {demo ? (
-          <p className="mt-3 text-sm text-[#6a4b12]">
-            Demo checks do not call SerpApi. They do not invent a corrigendum, a new deadline, or a new source.
-          </p>
-        ) : (
-          <p className="mt-3 text-sm">Live checks bypass the search cache and keep only results that match this notice.</p>
-        )}
+        <p className="mt-3 text-sm">Check for updates bypasses the search cache, calls SerpApi, and keeps only results that match this notice.</p>
         <h3 className="mt-4 text-sm font-medium">Snapshots</h3>
         {tender.snapshots.length === 0 ? (
           <p className="mt-1 text-sm">No snapshot stored yet. Run Discover, then check again.</p>
         ) : (
           <ul className="mt-2 space-y-1 text-sm">
-            {tender.snapshots.map((snapshot) => (
-              <li key={snapshot.id}>{formatIst(snapshot.capturedAt)}</li>
+            {tender.snapshots.map((snapshot, index) => (
+              <li key={snapshot.id}>
+                {index === tender.snapshots.length - 1 ? "Discovered" : "Checked"} · {formatIst(snapshot.capturedAt)}
+              </li>
             ))}
           </ul>
         )}
@@ -228,7 +208,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
         <h2 className="font-serif text-2xl">Evidence graph</h2>
         <div className="mt-3">
-          <EvidenceGraph nodes={graph.nodes} edges={graph.edges} demo={demo} />
+          <EvidenceGraph nodes={graph.nodes} edges={graph.edges} />
         </div>
       </section>
     </div>

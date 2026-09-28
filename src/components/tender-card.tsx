@@ -38,8 +38,8 @@ export function TenderCard({ item }: { item: TenderListItem }) {
         <div>
           <dt className="text-[#5c564c]">Evidence</dt>
           <dd>
-            {item.sourceCount} supporting source{item.sourceCount === 1 ? "" : "s"} ·{" "}
-            {item.dataMode === "demo" ? "Demo fixture" : authorityLabel(item.authority)}
+            {item.sourceCount} supporting source{item.sourceCount === 1 ? "" : "s"} · {authorityLabel(item.authority)}
+            {item.hasNews ? " · includes Google News" : ""}
           </dd>
         </div>
         <div>

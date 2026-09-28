@@ -1,21 +1,21 @@
 import { DiscoverRunner } from "@/components/discover-runner";
 import { TenderCard } from "@/components/tender-card";
 import { formatIst } from "@/lib/format";
-import { currentDataMode } from "@/lib/mode";
-import { listSearchRuns, listTenders } from "@/lib/tenders/queries";
+import { serpApiKeyPresent } from "@/lib/mode";
+import { latestLiveRetrieval, listSearchRuns, listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DiscoverPage() {
-  const mode = currentDataMode();
-  const [tenders, runs] = await Promise.all([listTenders(mode), listSearchRuns(mode)]);
+  const [tenders, runs, lastVerified] = await Promise.all([listTenders(), listSearchRuns(), latestLiveRetrieval()]);
   return (
     <div className="space-y-6">
-      <DiscoverRunner mode={mode} />
+      <DiscoverRunner liveSearch={serpApiKeyPresent()} />
       <section className="space-y-3">
-        <h2 className="font-serif text-2xl">{mode === "live" ? "Stored live notices" : "Demo notices"}</h2>
+        <h2 className="font-serif text-2xl">Stored live notices</h2>
+        {lastVerified ? <p className="text-sm text-[#5c564c]">Showing last verified live result. Retrieved: {formatIst(lastVerified)}</p> : null}
         {tenders.length === 0 ? (
-          <p className="text-sm text-[#5c564c]">No notices stored for this mode.</p>
+          <p className="text-sm text-[#5c564c]">No verified data available.</p>
         ) : (
           tenders.map((item) => <TenderCard key={item.id} item={item} />)
         )}
@@ -28,7 +28,7 @@ export default async function DiscoverPage() {
           <ul className="mt-3 space-y-3 text-sm">
             {runs.map((run) => (
               <li key={run.id} className="border-t border-[#efe8da] pt-3">
-                <p className="font-medium">{run.dataMode === "demo" ? "Demo fixture · SerpApi not called" : run.engine}</p>
+                <p className="font-medium">{run.engine === "google_news" ? "Google News via SerpApi" : "Google Search via SerpApi"}</p>
                 <p>{run.query}</p>
                 <p className="text-[#5c564c]">
                   gl=in · hl=en · {run._count.sources} sources · {run.status}

@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CheckUpdatesButton } from "@/components/check-updates-button";
+import { EvidenceGraph } from "@/components/evidence-graph";
 import { VerdictBadge } from "@/components/verdict-badge";
 import { WatchButton } from "@/components/watch-button";
 import { formatDateIst, formatInr, formatIst, orUnavailable } from "@/lib/format";
 import { authorityLabel } from "@/lib/tender/authority";
+import { buildEvidenceGraph } from "@/lib/tender/graph";
 import { getTenderDetail } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
@@ -12,8 +15,30 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
   const { id } = await params;
   const detail = await getTenderDetail(id);
   if (!detail) notFound();
-  const { tender, evaluation, rows, matches, reasons } = detail;
+  const { tender, evaluation, rows, matches, reasons, related } = detail;
   const demo = tender.dataMode === "demo";
+  const graph = buildEvidenceGraph({
+    tenderId: tender.id,
+    title: tender.title,
+    buyer: tender.buyer,
+    department: tender.department,
+    evidenceText: tender.evidenceCorpus,
+    sources: demo
+      ? []
+      : tender.sources.map((link) => ({
+          id: link.source.id,
+          title: link.source.title,
+          url: link.source.url,
+          authority: link.source.authorityTier,
+          snippet: link.source.snippet,
+        })),
+    changes: tender.changes.map((change) => ({
+      changeType: change.changeType,
+      summary: change.summary,
+      evidence: change.evidence,
+    })),
+    related,
+  });
 
   return (
     <div className="space-y-6">
@@ -29,6 +54,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
           <div className="flex items-center gap-2">
             <VerdictBadge verdict={evaluation?.verdict ?? null} />
             <WatchButton tenderId={tender.id} watched={Boolean(tender.watch)} />
+            <CheckUpdatesButton tenderId={tender.id} />
           </div>
         </div>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
@@ -150,6 +176,60 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-serif text-2xl">Time Machine</h2>
+            <p className="mt-1 max-w-2xl text-sm text-[#5c564c]">
+              Each check stores a snapshot of the fields already on this notice. A difference is recorded only when a later snapshot changes a stored field. The first snapshot is a baseline.
+            </p>
+          </div>
+          <CheckUpdatesButton tenderId={tender.id} />
+        </div>
+        {demo ? (
+          <p className="mt-3 text-sm text-[#6a4b12]">
+            Demo checks do not call SerpApi. They do not invent a corrigendum, a new deadline, or a new source.
+          </p>
+        ) : (
+          <p className="mt-3 text-sm">Live checks bypass the search cache and keep only results that match this notice.</p>
+        )}
+        <h3 className="mt-4 text-sm font-medium">Snapshots</h3>
+        {tender.snapshots.length === 0 ? (
+          <p className="mt-1 text-sm">No snapshot stored yet. Run Discover, then check again.</p>
+        ) : (
+          <ul className="mt-2 space-y-1 text-sm">
+            {tender.snapshots.map((snapshot) => (
+              <li key={snapshot.id}>{formatIst(snapshot.capturedAt)}</li>
+            ))}
+          </ul>
+        )}
+        <h3 className="mt-4 text-sm font-medium">Verified changes</h3>
+        {tender.changes.length === 0 ? (
+          <p className="mt-1 text-sm">No verified change detected.</p>
+        ) : (
+          <ul className="mt-2 space-y-3 text-sm">
+            {tender.changes.map((change) => (
+              <li key={change.id} className="border-t border-[#efe8da] pt-3">
+                <p className="font-medium">
+                  {change.summary} · {formatIst(change.detectedAt)}
+                </p>
+                <p>
+                  {change.beforeValue ?? "Not recorded"} → {change.afterValue ?? "Not recorded"}
+                </p>
+                <p className="break-all text-[#5c564c]">{change.evidence ?? "No source URL stored."}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
+        <h2 className="font-serif text-2xl">Evidence graph</h2>
+        <div className="mt-3">
+          <EvidenceGraph nodes={graph.nodes} edges={graph.edges} demo={demo} />
+        </div>
       </section>
     </div>
   );

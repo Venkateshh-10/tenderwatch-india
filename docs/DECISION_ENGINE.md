@@ -20,3 +20,5 @@ Only a VERIFIED mandatory failure becomes an automatic blocker. Unknown turnover
 Hard checks include turnover, company age, experience that the company cannot have reached, missing mandatory certifications, EMD above the configured limit, and a verified past closing date.
 
 Company data may be the example SME profile. Tender facts are not seeded in live mode.
+
+A later check re-runs the same rules on the updated text. Time Machine does not change a verdict by itself. It only records fields that differ between snapshots.

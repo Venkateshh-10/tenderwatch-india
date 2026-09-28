@@ -62,9 +62,13 @@ Evidence extraction
 Readiness engine
     ↓
 BID / REVIEW / SKIP
+    ↓
+Snapshots and Time Machine
+    ↓
+Evidence graph
 ```
 
-Time Machine and the evidence graph are not in this build.
+Check for updates stores a snapshot and records a change only when a later snapshot differs. The evidence graph is drawn from stored buyer, department, official sources, change keywords, and notices with the same buyer.
 
 ## Setup
 
@@ -108,7 +112,7 @@ The app does not log in to government portals, bypass access controls, or submit
 
 ## Testing
 
-Unit tests cover query caps, source classification, deduplication, deadline comparison, turnover, certification, company age, and EMD blockers, unknown evidence, SerpApi payload normalization, and cache keys. Tests use captured structures in the test file. They do not call SerpApi and are not shown in the product UI.
+Unit tests cover query caps, source classification, deduplication, deadline comparison, turnover, certification, company age, and EMD blockers, unknown evidence, SerpApi payload normalization, cache keys, snapshot diffs, and the evidence graph. Tests use captured structures in the test file. They do not call SerpApi and are not shown in the product UI.
 
 ## Limitations
 
@@ -117,7 +121,8 @@ Unit tests cover query caps, source classification, deduplication, deadline comp
 - Missing evidence stays UNKNOWN or REVIEW. The app does not fill gaps with guesses.
 - TenderWatch does not submit bids.
 - Snippet-only facts are treated more cautiously than text fetched from a public page.
-- Change history and the evidence graph are not implemented yet.
+- Demo checks do not call SerpApi and do not invent a deadline, corrigendum, or source. Live checks bypass the cache, use at most four change queries, and keep only hits that match the notice.
+- The evidence graph does not add a node that is not present in stored fields. Demo fixtures are not labeled as official announcements.
 
 ## AI disclosure
 

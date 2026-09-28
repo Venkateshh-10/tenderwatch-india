@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { DEMO_FIXTURES } from "@/lib/demo/fixtures";
 import { currentDataMode, type DataMode } from "@/lib/mode";
 import { evaluateReadiness, type Evaluation } from "@/lib/readiness/evaluate";
-import { planDiscoveryQueries, type PlannedQuery } from "@/lib/search/query-planner";
+import { planChangeQueries, planDiscoveryQueries, type PlannedQuery } from "@/lib/search/query-planner";
 import { buildCacheKey, cacheExpiry, cacheIsFresh } from "@/lib/serpapi/cache";
 import { searchGoogle } from "@/lib/serpapi/google";
 import { searchGoogleNews } from "@/lib/serpapi/news";
@@ -14,7 +14,10 @@ import { authorityRank, classifyDomain, type AuthorityTier } from "@/lib/tender/
 import { clusterItems, dedupeKeyFor, type DedupeInput } from "@/lib/tender/dedupe";
 import { extractFacts, type RequirementDraft } from "@/lib/tender/extract";
 import { fetchPublicExcerpt } from "@/lib/tender/fetch-source";
-import { uniqueStrings } from "@/lib/tender/text";
+import { recordSnapshot } from "@/lib/tender/record-snapshot";
+import type { SnapshotPayload } from "@/lib/tender/snapshot";
+import { istDateKey } from "@/lib/tender/dates";
+import { jaccard, normalizeUrl, titleTokens, uniqueStrings } from "@/lib/tender/text";
 
 export type DiscoveryLogEntry = {
   engine: string;
@@ -253,9 +256,42 @@ async function materialize(sourced: Sourced[], company: CompanyDna, mode: DataMo
         update: { role: item.sourceId === primary.sourceId ? "primary" : "supporting" },
       });
     }
+    await recordSnapshot(
+      tender.id,
+      snapshotFromCluster({ title: primary.title, facts, primary, text, sources: ordered }),
+    );
     if (evaluation.verdict === "BID" || evaluation.verdict === "REVIEW") relevant += 1;
   }
   return { unique: clusters.length, relevant };
+}
+
+function snapshotFromCluster(input: {
+  title: string;
+  facts: ReturnType<typeof extractFacts>;
+  primary: Sourced;
+  text: string;
+  sources: Sourced[];
+}): SnapshotPayload {
+  return {
+    title: input.title,
+    tenderReference: input.facts.tenderReference,
+    buyer: input.facts.buyer,
+    closingDate: input.facts.closingDate ? istDateKey(input.facts.closingDate) : null,
+    estimatedValueInr: input.facts.estimatedValueInr,
+    emdInr: input.facts.emdInr,
+    turnoverRequirementInr: input.facts.turnoverRequirementInr,
+    experienceRequirementYears: input.facts.experienceRequirementYears,
+    certificationsRequired: input.facts.certifications,
+    status: input.facts.status,
+    primarySourceUrl: input.primary.primarySourceUrl,
+    state: input.facts.state,
+    sources: input.sources.map((source) => ({
+      url: source.primarySourceUrl,
+      domain: source.primarySourceDomain,
+      authority: source.authority,
+    })),
+    evidenceText: input.text.slice(0, 4000),
+  };
 }
 
 function mergeRequirements(requirements: RequirementDraft[]): RequirementDraft[] {
@@ -480,6 +516,211 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
     relevantOpportunities: counts.relevant,
     error: failures === planned.length ? "Live search unavailable." : null,
   };
+}
+
+export type RefreshResult = {
+  ok: boolean;
+  calledSerpApi: boolean;
+  message: string;
+  newChanges: Array<{ changeType: string; summary: string; beforeValue: string | null; afterValue: string | null; evidence: string | null }>;
+  error: string | null;
+};
+
+export async function refreshTender(tenderId: string): Promise<RefreshResult> {
+  const tender = await prisma.tender.findUnique({
+    where: { id: tenderId },
+    include: { sources: { include: { source: true } } },
+  });
+  if (!tender) return { ok: false, calledSerpApi: false, message: "Notice not found.", newChanges: [], error: "Notice not found." };
+
+  const mode = currentDataMode();
+  if (mode === "demo" || tender.dataMode === "demo") {
+    const checkedAt = new Date();
+    await prisma.tender.update({ where: { id: tenderId }, data: { lastCheckedAt: checkedAt } });
+    await prisma.watchlistItem.updateMany({ where: { tenderId }, data: { lastCheckedAt: checkedAt } });
+    return {
+      ok: true,
+      calledSerpApi: false,
+      message: "No verified change detected. SerpApi was not called.",
+      newChanges: [],
+      error: null,
+    };
+  }
+
+  const company = await getCompany();
+  const queries = planChangeQueries({
+    title: tender.title,
+    tenderReference: tender.tenderReference,
+    primarySourceDomain: tender.primarySourceDomain,
+  });
+  const matched: Sourced[] = [];
+  let failures = 0;
+  for (const query of queries) {
+    const outcome = await executeLiveQuery(query, true);
+    if (outcome.error) {
+      failures += 1;
+      await storeRun({
+        query,
+        mode: "live",
+        status: "error",
+        error: outcome.error,
+        cacheHit: false,
+        retrievedAt: outcome.retrievedAt,
+        hits: [],
+      });
+      continue;
+    }
+    const hits = outcome.hits.filter((hit) => sourceMatchesTender(hit.title, hit.snippet, hit.url, tender));
+    const rows = await storeRun({
+      query,
+      mode: "live",
+      status: "success",
+      error: null,
+      cacheHit: outcome.cacheHit,
+      retrievedAt: outcome.retrievedAt,
+      hits: hits.map((hit) => ({
+        title: hit.title,
+        url: hit.url,
+        displayedLink: hit.displayedLink,
+        domain: hit.domain,
+        snippet: hit.snippet,
+        dateText: hit.dateText,
+        position: hit.position,
+        authority: classifyDomain(hit.domain),
+        pageText: null,
+        fromPage: false,
+      })),
+    });
+    matched.push(...rows);
+  }
+
+  if (failures === queries.length) {
+    return {
+      ok: false,
+      calledSerpApi: true,
+      message: "Live search unavailable.",
+      newChanges: [],
+      error: "Live search unavailable.",
+    };
+  }
+
+  const previousSources: Sourced[] = tender.sources.map((link) => ({
+    sourceId: link.sourceId,
+    title: link.source.title,
+    tenderReference: tender.tenderReference,
+    buyer: tender.buyer,
+    primarySourceUrl: link.source.url,
+    primarySourceDomain: link.source.domain,
+    closingDate: tender.closingDate,
+    authority: link.source.authorityTier as AuthorityTier,
+    snippet: link.source.snippet ?? "",
+    pageText: link.source.fetchedExcerpt,
+    fromPage: link.source.fetchStatus === "verified_text",
+    query: "",
+    engine: link.source.engine,
+    position: link.source.position,
+  }));
+  const cluster = [...previousSources, ...matched];
+  const ordered = [...cluster].sort((a, b) => authorityRank(a.authority) - authorityRank(b.authority) || a.position - b.position);
+  const primary = ordered[0];
+  const text = uniqueStrings(ordered.flatMap((item) => [item.pageText, item.snippet, item.title])).join("\n");
+  const facts = extractFacts({
+    text,
+    authority: primary.authority,
+    fromPage: ordered.some((item) => item.fromPage),
+    sourceUrl: primary.primarySourceUrl,
+  });
+  const requirements = mergeRequirements(
+    ordered
+      .map((item) =>
+        extractFacts({
+          text: `${item.title}\n${item.pageText ?? item.snippet}`,
+          authority: item.authority,
+          fromPage: item.fromPage,
+          sourceUrl: item.primarySourceUrl,
+        }).requirements,
+      )
+      .flat(),
+  );
+  const data = tenderData({ key: tender.dedupeKey, mode: "live", title: primary.title || tender.title, facts, primary, text });
+  await prisma.tender.update({
+    where: { id: tender.id },
+    data: { ...data, dedupeKey: tender.dedupeKey },
+  });
+  await prisma.requirement.deleteMany({ where: { tenderId: tender.id } });
+  if (requirements.length > 0) {
+    await prisma.requirement.createMany({
+      data: requirements.map((requirement) => ({
+        tenderId: tender.id,
+        type: requirement.type,
+        label: requirement.label,
+        value: requirement.value,
+        numericValue: requirement.numericValue,
+        unit: requirement.unit,
+        mandatoryStatus: requirement.mandatoryStatus,
+        evidenceText: requirement.evidenceText,
+        sourceUrl: requirement.sourceUrl,
+        sourceAuthority: requirement.sourceAuthority,
+        evidenceStatus: requirement.evidenceStatus,
+        confidence: requirement.confidence,
+      })),
+    });
+  }
+  const evaluation = evaluateReadiness({
+    company,
+    title: primary.title || tender.title,
+    evidenceText: text,
+    state: facts.state,
+    closingDate: facts.closingDate,
+    estimatedValueInr: facts.estimatedValueInr,
+    primaryAuthority: primary.authority,
+    primarySourceUrl: primary.primarySourceUrl,
+    requirements,
+    fromPage: ordered.some((item) => item.fromPage),
+  });
+  await prisma.readinessEvaluation.create({
+    data: {
+      tenderId: tender.id,
+      verdict: evaluation.verdict,
+      reasonsJson: JSON.stringify(evaluation.reasons),
+      blockersJson: JSON.stringify(evaluation.blockers),
+      concernsJson: JSON.stringify(evaluation.concerns),
+      rowsJson: JSON.stringify(evaluation.rows),
+      matchJson: JSON.stringify(evaluation.matches),
+      summary: evaluation.summary,
+    },
+  });
+  for (const item of matched) {
+    await prisma.tenderSource.upsert({
+      where: { tenderId_sourceId: { tenderId: tender.id, sourceId: item.sourceId } },
+      create: { tenderId: tender.id, sourceId: item.sourceId, role: "supporting" },
+      update: {},
+    });
+  }
+  const newChanges = await recordSnapshot(
+    tender.id,
+    snapshotFromCluster({ title: primary.title || tender.title, facts, primary, text, sources: ordered }),
+  );
+  await prisma.watchlistItem.updateMany({ where: { tenderId }, data: { lastCheckedAt: new Date() } });
+  return {
+    ok: true,
+    calledSerpApi: true,
+    message: newChanges.length === 0 ? "No verified change detected." : `${newChanges.length} verified change${newChanges.length === 1 ? "" : "s"} detected.`,
+    newChanges,
+    error: null,
+  };
+}
+
+function sourceMatchesTender(
+  title: string,
+  snippet: string | null,
+  url: string,
+  tender: { title: string; tenderReference: string | null; primarySourceUrl: string },
+): boolean {
+  const blob = `${title}\n${snippet ?? ""}`.toLowerCase();
+  if (tender.tenderReference && blob.includes(tender.tenderReference.toLowerCase())) return true;
+  if (normalizeUrl(url) === normalizeUrl(tender.primarySourceUrl)) return true;
+  return jaccard(titleTokens(title), titleTokens(tender.title)) >= 0.45;
 }
 
 export type { Evaluation };

@@ -20,7 +20,9 @@ Used for procurement announcements and context. A news item is supporting eviden
 
 ## Query planner
 
-`src/lib/search/query-planner.ts` builds at most 5 Google queries and 2 news queries, and drops duplicate text. The planner also has a smaller change-query helper for a later monitoring pass. That pass is not wired to the UI yet.
+`src/lib/search/query-planner.ts` builds at most 5 Google queries and 2 news queries, and drops duplicate text.
+
+Check for updates uses `planChangeQueries`: at most 4 queries, mixing a reference search, corrigendum or amendment wording, and one Google News query. Those calls set refresh so the cache is bypassed. A hit is kept only when it contains the tender reference, matches the primary URL, or shares enough of the title. If every change query fails, the API returns “Live search unavailable” and does not substitute demo fixtures. When `SERPAPI_API_KEY` is absent, Check for updates does not call SerpApi.
 
 ## Provenance
 

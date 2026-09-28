@@ -1,15 +1,21 @@
 import Link from "next/link";
 import { TenderCard } from "@/components/tender-card";
+import { VerdictChart } from "@/components/verdict-chart";
 import { getCompany } from "@/lib/company/store";
-import { formatInr } from "@/lib/format";
+import { formatInr, formatIst } from "@/lib/format";
 import { currentDataMode } from "@/lib/mode";
-import { dashboardCounts, listTenders } from "@/lib/tenders/queries";
+import { countChangedTenders, dashboardCounts, listRecentChanges, listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const mode = currentDataMode();
-  const [company, tenders] = await Promise.all([getCompany(), listTenders(mode)]);
+  const [company, tenders, changed, recentChanges] = await Promise.all([
+    getCompany(),
+    listTenders(mode),
+    countChangedTenders(mode),
+    listRecentChanges(mode),
+  ]);
   const counts = dashboardCounts(tenders);
   const metrics = [
     ["Opportunities", counts.total],
@@ -17,6 +23,7 @@ export default async function DashboardPage() {
     ["REVIEW", counts.review],
     ["SKIP", counts.skip],
     ["Closing this week", counts.closingThisWeek],
+    ["CHANGED", changed],
   ] as const;
 
   return (
@@ -29,7 +36,7 @@ export default async function DashboardPage() {
           compares discovered notices with this profile and shows why a result is BID, REVIEW, or SKIP.
         </p>
       </section>
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         {metrics.map(([label, value]) => (
           <div key={label} className="rounded-xl border border-[#e4dccb] bg-white p-3">
             <p className="text-xs uppercase tracking-wide text-[#5c564c]">{label}</p>
@@ -37,6 +44,30 @@ export default async function DashboardPage() {
           </div>
         ))}
       </section>
+      {tenders.length > 0 ? (
+        <section className="rounded-xl border border-[#e4dccb] bg-white p-4">
+          <h2 className="font-serif text-2xl">Verdicts</h2>
+          <p className="mt-1 text-sm text-[#5c564c]">
+            CHANGED counts notices in this mode with at least one stored difference. Zero means no verified change yet.
+          </p>
+          <VerdictChart bid={counts.bid} review={counts.review} skip={counts.skip} changed={changed} />
+          {recentChanges.length > 0 ? (
+            <ul className="mt-2 space-y-2 text-sm">
+              {recentChanges.map((change) => (
+                <li key={change.id}>
+                  <Link href={`/tenders/${change.tender.id}`} className="underline">
+                    {change.tender.title}
+                  </Link>
+                  {" · "}
+                  {change.summary} · {formatIst(change.detectedAt)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm">No verified change detected.</p>
+          )}
+        </section>
+      ) : null}
       {tenders.length === 0 ? (
         <section className="rounded-xl border border-dashed border-[#cfc4ad] bg-white p-6">
           <h2 className="font-serif text-xl">No {mode === "live" ? "live" : "demo"} opportunities yet</h2>

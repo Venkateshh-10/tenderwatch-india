@@ -76,6 +76,8 @@ export async function getTenderDetail(id: string) {
         include: { source: { include: { searchRun: true } } },
         orderBy: { source: { position: "asc" } },
       },
+      snapshots: { orderBy: { capturedAt: "desc" }, take: 8 },
+      changes: { orderBy: { detectedAt: "desc" } },
     },
   });
   if (!tender) return null;
@@ -83,7 +85,33 @@ export async function getTenderDetail(id: string) {
   const rows: ComparisonRow[] = evaluation ? (JSON.parse(evaluation.rowsJson) as ComparisonRow[]) : [];
   const matches: MatchReason[] = evaluation ? (JSON.parse(evaluation.matchJson) as MatchReason[]) : [];
   const reasons = parseArray(evaluation?.reasonsJson);
-  return { tender, evaluation, rows, matches, reasons };
+  const related = tender.buyer
+    ? await prisma.tender.findMany({
+        where: { dataMode: tender.dataMode, buyer: tender.buyer, NOT: { id: tender.id } },
+        select: { id: true, title: true },
+        orderBy: { lastCheckedAt: "desc" },
+        take: 4,
+      })
+    : [];
+  return { tender, evaluation, rows, matches, reasons, related };
+}
+
+export async function countChangedTenders(mode: DataMode): Promise<number> {
+  const rows = await prisma.tenderChange.findMany({
+    where: { tender: { dataMode: mode } },
+    select: { tenderId: true },
+    distinct: ["tenderId"],
+  });
+  return rows.length;
+}
+
+export async function listRecentChanges(mode: DataMode, take = 5) {
+  return prisma.tenderChange.findMany({
+    where: { tender: { dataMode: mode } },
+    orderBy: { detectedAt: "desc" },
+    take,
+    include: { tender: { select: { id: true, title: true } } },
+  });
 }
 
 export async function listSearchRuns(mode: DataMode, take = 12) {

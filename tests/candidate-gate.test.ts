@@ -54,7 +54,7 @@ describe("tender candidate gate", () => {
       title: "Notice Inviting Tender copied by an aggregator",
       url: "https://www.tenderdetail.com/indian-tenders/vision",
       domain: "tenderdetail.com",
-      snippet: "Notice Inviting Tender. Reference 2026_TN_123456_1.",
+      snippet: "Notice Inviting Tender for Tamil Nadu. Buyer: Chennai Corporation. Reference 2026_TN_123456_1.",
     });
     expect(decision.hitClass).toBe("TenderCandidate");
     expect(decision.confidence).toBe("MEDIUM");
@@ -174,6 +174,53 @@ describe("tender candidate gate", () => {
         url: "https://eprocure.gov.in/eprocure/app",
         domain: "eprocure.gov.in",
         snippet: "Notice Inviting Tender",
+      }).hitClass,
+    ).toBe("RejectedResult");
+  });
+
+  it("rejects a foreign directory listing such as Deepbloo and Philippine Postal", () => {
+    const decision = classifySearchHit({
+      engine: "google",
+      title: "Artificial Intelligence (AI) Tenders – Deepbloo, Asia",
+      url: "https://www.deepbloo.com/tenders/artificial-intelligence",
+      domain: "deepbloo.com",
+      snippet: "Philippine Postal Corporation. Bid Number PHL-2026-88.",
+    });
+    expect(decision.hitClass).toBe("RejectedResult");
+  });
+
+  it("rejects a foreign government portal", () => {
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "Notice Inviting Tender",
+        url: "https://www.phlpost.gov.ph/tenders/ai",
+        domain: "phlpost.gov.ph",
+        snippet: "NIT for software.",
+      }).hitClass,
+    ).toBe("RejectedResult");
+  });
+
+  it("keeps an official Indian notice that mentions another country", () => {
+    const decision = classifySearchHit({
+      engine: "google",
+      title: "Notice Inviting Tender for a training system",
+      url: "https://eprocure.gov.in/eprocure/app?component=view&id=9",
+      domain: "eprocure.gov.in",
+      snippet: "NIT. The scope is not a Singapore supply. Reference 2026_CPPP_123456_1.",
+    });
+    expect(decision.hitClass).toBe("TenderCandidate");
+    expect(decision.confidence).toBe("HIGH");
+  });
+
+  it("rejects an aggregator that has no Indian issuer", () => {
+    expect(
+      classifySearchHit({
+        engine: "google",
+        title: "Notice Inviting Tender",
+        url: "https://www.tenderdetail.com/global/vision",
+        domain: "tenderdetail.com",
+        snippet: "Notice Inviting Tender. Reference 2026_XX_123456_1.",
       }).hitClass,
     ).toBe("RejectedResult");
   });

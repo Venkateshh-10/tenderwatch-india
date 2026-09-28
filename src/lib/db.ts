@@ -1,25 +1,22 @@
-import path from "node:path";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "@/generated/prisma/client";
+import { sqliteFileUrl } from "@/lib/server-env";
 
-function sqliteFileUrl(): string {
-  const raw = process.env.DATABASE_URL ?? "file:./prisma/dev.db";
-  if (!raw.startsWith("file:")) return raw;
-  const filePath = raw.slice("file:".length);
-  if (!filePath || filePath === ":memory:") return raw;
-  if (path.isAbsolute(filePath)) return `file:${filePath}`;
-  return `file:${path.join(/*turbopackIgnore: true*/ process.cwd(), filePath)}`;
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient; prismaUrl?: string };
+
+function getClient(): PrismaClient {
+  const url = sqliteFileUrl();
+  if (globalForPrisma.prisma && globalForPrisma.prismaUrl === url) return globalForPrisma.prisma;
+  const adapter = new PrismaBetterSqlite3({ url });
+  const client = new PrismaClient({ adapter });
+  globalForPrisma.prisma = client;
+  globalForPrisma.prismaUrl = url;
+  return client;
 }
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+export const prisma = getClient();
 
-function createClient() {
-  const adapter = new PrismaBetterSqlite3({ url: sqliteFileUrl() });
-  return new PrismaClient({ adapter });
-}
-
-export const prisma = globalForPrisma.prisma ?? createClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+export function databaseFilePath(): string {
+  const url = sqliteFileUrl();
+  return url.startsWith("file:") ? url.slice("file:".length) : url;
 }

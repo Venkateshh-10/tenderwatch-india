@@ -130,6 +130,7 @@ async function storeRun(input: {
   error: string | null;
   cacheHit: boolean;
   retrievedAt: Date;
+  sessionId?: string | null;
   hits: Array<{ title: string; url: string; displayedLink: string | null; domain: string; snippet: string | null; dateText: string | null; position: number; authority: AuthorityTier; pageText: string | null; fromPage: boolean; verification?: SourceVerification }>;
 }): Promise<Sourced[]> {
   const run = await prisma.searchRun.create({
@@ -144,6 +145,7 @@ async function storeRun(input: {
       purpose: "discovery",
       dataMode: input.mode,
       retrievedAt: input.retrievedAt,
+      sessionId: input.sessionId ?? null,
     },
   });
 
@@ -463,30 +465,49 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
     });
   }
 
+  const session = await prisma.discoverySession.create({
+    data: { dataMode: "live", queryCount: planned.length },
+  });
+  const finishSession = (counts: { raw: number; candidates: number; rejected: number; news: number; unique: number; relevant: number }) =>
+    prisma.discoverySession.update({
+      where: { id: session.id },
+      data: {
+        finishedAt: new Date(),
+        rawCount: counts.raw,
+        candidateCount: counts.candidates,
+        rejectedCount: counts.rejected,
+        newsCount: counts.news,
+        uniqueCount: counts.unique,
+        relevantCount: counts.relevant,
+        queryCount: planned.length,
+      },
+    });
+
   let failures = 0;
   const liveHits: Array<{ query: PlannedQuery; hits: NormalizedHit[]; retrievedAt: Date; cacheHit: boolean }> = [];
   for (const query of planned) {
     const outcome = await executeLiveQuery(query, refresh);
     if (outcome.error) {
       failures += 1;
-      log.push({
-        engine: query.engine,
-        query: query.query,
-        status: "error",
-        resultCount: 0,
-        cacheHit: false,
-        retrievedAt: outcome.retrievedAt.toISOString(),
-        message: outcome.error,
-      });
-      await storeRun({
-        query,
-        mode: "live",
-        status: "error",
-        error: outcome.error,
-        cacheHit: false,
-        retrievedAt: outcome.retrievedAt,
-        hits: [],
-      });
+    log.push({
+      engine: query.engine,
+      query: query.query,
+      status: "error",
+      resultCount: 0,
+      cacheHit: false,
+      retrievedAt: outcome.retrievedAt.toISOString(),
+      message: outcome.error,
+    });
+    await storeRun({
+      query,
+      mode: "live",
+      status: "error",
+      error: outcome.error,
+      cacheHit: false,
+      retrievedAt: outcome.retrievedAt,
+      sessionId: session.id,
+      hits: [],
+    });
       continue;
     }
     log.push({
@@ -526,19 +547,24 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
       error: null,
       cacheHit: batch.cacheHit,
       retrievedAt: batch.retrievedAt,
-      hits: batch.hits.map((hit) => ({
-        title: hit.title,
-        url: hit.url,
-        displayedLink: hit.displayedLink,
-        domain: hit.domain,
-        snippet: hit.snippet,
-        dateText: hit.dateText,
-        position: hit.position,
-        authority: classifyDomain(hit.domain),
-        pageText: excerpts.get(hit.url) ?? null,
-        fromPage: excerpts.has(hit.url),
-        verification: excerpts.has(hit.url) ? "VERIFIED_SOURCE" : enriched.verification.get(hit.url) ?? (classifyDomain(hit.domain) === "A" || classifyDomain(hit.domain) === "B" ? "DISCOVERED_OFFICIAL" : "UNVERIFIED"),
-      })),
+      sessionId: session.id,
+      hits: batch.hits.map((hit) => {
+        const verification = enriched.verification.get(hit.url) ?? (classifyDomain(hit.domain) === "A" || classifyDomain(hit.domain) === "B" ? "DISCOVERED_OFFICIAL" : "UNVERIFIED");
+        const verified = isVerifiedFetch(verification);
+        return {
+          title: hit.title,
+          url: hit.url,
+          displayedLink: hit.displayedLink,
+          domain: hit.domain,
+          snippet: hit.snippet,
+          dateText: hit.dateText,
+          position: hit.position,
+          authority: classifyDomain(hit.domain),
+          pageText: verified ? excerpts.get(hit.url) ?? null : null,
+          fromPage: verified,
+          verification,
+        };
+      }),
     });
     const batchCards = rows.filter(isOpportunitySource);
     const batchNews = rows.filter((row) => row.hitClass === "SupportingNews");
@@ -555,6 +581,7 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
   }
 
   if (allHits.length === 0) {
+    await finishSession({ raw: 0, candidates: 0, rejected: rejectedCount, news: 0, unique: 0, relevant: 0 });
     return attachVerification({
       mode,
       log,
@@ -572,6 +599,14 @@ export async function runDiscovery(options: { refresh?: boolean } = {}): Promise
   await attachSupportingNews(counts.records, newsRows);
   await attachChangeCandidates(counts.records, changeRows);
   await retireFailedOpportunities();
+  await finishSession({
+    raw: allHits.length,
+    candidates: cards.length,
+    rejected: rejectedCount,
+    news: newsRows.length,
+    unique: counts.unique,
+    relevant: counts.relevant,
+  });
   return attachVerification({
     mode,
     log,

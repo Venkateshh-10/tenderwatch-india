@@ -34,6 +34,8 @@ const AGGREGATORS = [
   "tendernews.com",
   "indiatenders.com",
   "tendersinfo.net",
+  "deepbloo.com",
+  "deepbloo.in",
 ];
 
 const OFFICIAL_COMPANIES = [

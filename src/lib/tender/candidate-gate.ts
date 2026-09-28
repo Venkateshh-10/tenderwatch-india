@@ -182,6 +182,28 @@ function bareHomepage(url: string): boolean {
   }
 }
 
+const FOREIGN_BUYER =
+  /\b(philippine|philippines|manila|pakistan|bangladesh|sri lanka|colombo|nepal|kathmandu|bhutan|myanmar|singapore|malaysia|indonesia|jakarta|thailand|bangkok|vietnam|hanoi|china|beijing|united states|united kingdom|dubai|uae|abu dhabi|nigeria|kenya|australia|canada|europe|africa)\b/i;
+
+const INDIAN_PARTY =
+  /\b(india|indian|bharat|tamil nadu|karnataka|kerala|telangana|andhra pradesh|maharashtra|delhi|gujarat|rajasthan|odisha|west bengal|uttar pradesh|madhya pradesh|bihar|punjab|haryana|assam|goa|jharkhand|chhattisgarh|uttarakhand|himachal|jammu|kashmir|puducherry|chandigarh|ladakh|sikkim|manipur|meghalaya|mizoram|nagaland|tripura|arunachal)\b/i;
+
+export function isIndianProcurementHost(domainOrUrl: string): boolean {
+  const domain = cleanDomain(domainOrUrl);
+  if (!domain) return false;
+  if (domain.endsWith(".gov.in") || domain.endsWith(".nic.in") || domain === "gov.in" || domain === "nic.in") return true;
+  if (isKnownProcurementPortal(domain)) return true;
+  const tier = classifyDomain(domain);
+  return tier === "A" || tier === "B";
+}
+
+export function isForeignGovernmentHost(domainOrUrl: string): boolean {
+  const domain = cleanDomain(domainOrUrl);
+  if (!domain || isIndianProcurementHost(domain)) return false;
+  if (domain.endsWith(".gov") || domain.endsWith(".mil") || domain.endsWith(".gc.ca") || domain.endsWith(".gouv.fr")) return true;
+  return /(^|\.)gov\.[a-z]{2}$/.test(domain) || /(^|\.)go\.[a-z]{2}$/.test(domain);
+}
+
 function staleArchive(text: string, now: Date): boolean {
   const years = [...text.matchAll(/\b(?:19|20)\d{2}\b/g)].map((match) => Number(match[0]));
   if (years.length === 0) return false;
@@ -243,6 +265,22 @@ export function classifySearchHit(input: {
   const identity = hasProcurementIdentity(text);
   if (staleArchive(`${title}\n${snippet}`, now) && !(path && identity)) return reject("Stale archive page.");
   const signals = [path ? "procurement_path" : null, identity ? "procurement_identity" : null].filter((item): item is string => Boolean(item));
+  const indianPortal = isIndianProcurementHost(domain);
+  const indianParty = INDIAN_PARTY.test(text);
+  if (isForeignGovernmentHost(domain)) return reject("Foreign government portal.", signals);
+  if (FOREIGN_BUYER.test(`${text}\n${domain}`) && !indianPortal) return reject("Foreign buyer or place of supply.", signals);
+  if (!indianPortal && !indianParty) return reject("Not an Indian procurement source.", signals);
+  if (classifyDomain(domain) === "D") {
+    if (indianParty && hasReferenceToken(text)) {
+      return {
+        hitClass: "TenderCandidate",
+        confidence: "MEDIUM",
+        signals,
+        reason: "Aggregator names an Indian issuer and a tender reference. An official source is preferred.",
+      };
+    }
+    return reject("Aggregator listing without an identifiable Indian issuer and reference.", signals);
+  }
 
   if (standaloneChange(title)) {
     const confidence: TenderConfidence = path && (identity || hasReferenceToken(text)) ? "HIGH" : identity || hasReferenceToken(text) ? "MEDIUM" : "LOW";
@@ -256,13 +294,10 @@ export function classifySearchHit(input: {
   if (/\btender\s+management\b/i.test(title) && !identity) {
     return reject("Generic tender-management page without a tender identity.");
   }
-  if (classifyDomain(domain) === "D" && !hasReferenceToken(text)) {
-    return reject("Aggregator listing without a tender reference.");
-  }
-  if (path && identity && (domain.endsWith(".gov.in") || domain.endsWith(".nic.in") || isKnownProcurementPortal(domain) || classifyDomain(domain) === "A" || classifyDomain(domain) === "B")) {
+  if (path && identity && indianPortal) {
     return { hitClass: "TenderCandidate", confidence: "HIGH", signals, reason: "Procurement path and tender identity are both present." };
   }
-  if (identity) {
+  if (identity && (indianPortal || indianParty)) {
     return { hitClass: "TenderCandidate", confidence: "MEDIUM", signals, reason: "Tender identity without an official procurement path." };
   }
   if (path) {

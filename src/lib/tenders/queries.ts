@@ -5,6 +5,7 @@ import { OPPORTUNITY_DISPLAY_CAP } from "@/lib/search/limits";
 import { isVerifiedClosedTender } from "@/lib/tender/active";
 import { classifySearchHit, isDiscoverOpportunity, procurementPortalScore, type TenderConfidence } from "@/lib/tender/candidate-gate";
 import { isVerifiedFetch } from "@/lib/tender/fetch-source";
+import { opportunityRank } from "@/lib/tender/rank";
 
 const LIVE: DataMode = "live";
 
@@ -45,12 +46,17 @@ function parseArray(value: string | null | undefined): string[] {
 }
 
 function rankValue(item: TenderListItem & { portal: number; hasReference: boolean; fetched: boolean; completeness: number; bestPosition: number }, now: number): number {
-  const confidence = item.confidence === "HIGH" ? 5 : 2;
-  const portal = Math.max(0, 6 - item.portal);
   const fit = (item.verdict === "BID" ? 3 : item.verdict === "REVIEW" ? 2 : item.verdict === "SKIP" ? 1 : 0) + item.strongMatches;
-  const future = item.closingDate && item.closingDate.getTime() >= now ? 2 : 0;
-  const position = Math.max(0, 8 - item.bestPosition);
-  return confidence * 1_000_000 + portal * 100_000 + (item.hasReference ? 4 : 0) * 10_000 + (item.fetched ? 3 : 0) * 1_000 + item.completeness * 100 + fit * 10 + future * 5 + position;
+  return opportunityRank({
+    confidence: item.confidence,
+    portalScore: item.portal,
+    hasReference: item.hasReference,
+    verified: item.fetched,
+    completeness: item.completeness,
+    fit,
+    futureClosing: Boolean(item.closingDate && item.closingDate.getTime() >= now),
+    position: item.bestPosition,
+  });
 }
 
 export function displayedOpportunities(items: TenderListItem[]): TenderListItem[] {
@@ -224,6 +230,52 @@ function inClosingWindow(item: TenderListItem, now: number): boolean {
 export function tendersClosingThisWeek(items: TenderListItem[]): TenderListItem[] {
   const now = Date.now();
   return items.filter((item) => inClosingWindow(item, now));
+}
+
+export type DiscoverySessionSnapshot = {
+  id: string;
+  startedAt: Date;
+  finishedAt: Date | null;
+  rawCount: number;
+  candidateCount: number;
+  rejectedCount: number;
+  newsCount: number;
+  uniqueCount: number;
+  relevantCount: number;
+  queryCount: number;
+  searchedGoogle: boolean;
+  searchedNews: boolean;
+  runs: Array<{ id: string; engine: string; query: string; status: string; retrievedAt: Date }>;
+};
+
+export async function latestDiscoverySession(): Promise<DiscoverySessionSnapshot | null> {
+  const session = await prisma.discoverySession.findFirst({
+    where: { dataMode: LIVE },
+    orderBy: { startedAt: "desc" },
+    include: {
+      runs: {
+        orderBy: { executedAt: "asc" },
+        take: 12,
+        select: { id: true, engine: true, query: true, status: true, retrievedAt: true },
+      },
+    },
+  });
+  if (!session) return null;
+  return {
+    id: session.id,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    rawCount: session.rawCount,
+    candidateCount: session.candidateCount,
+    rejectedCount: session.rejectedCount,
+    newsCount: session.newsCount,
+    uniqueCount: session.uniqueCount,
+    relevantCount: session.relevantCount,
+    queryCount: session.queryCount,
+    searchedGoogle: session.runs.some((run) => run.engine === "google" && run.status === "success"),
+    searchedNews: session.runs.some((run) => run.engine === "google_news" && run.status === "success"),
+    runs: session.runs,
+  };
 }
 
 export async function searchActivity() {

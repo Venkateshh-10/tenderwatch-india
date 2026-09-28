@@ -8,14 +8,12 @@ import { ResultsToolbar } from "@/components/console/results-toolbar";
 import { SectionHeading } from "@/components/console/section-heading";
 import { TenderWorkbench } from "@/components/console/tender-workbench";
 import { getCompany } from "@/lib/company/store";
-import { serpApiKeyPresent } from "@/lib/mode";
+import { getDeskSnapshot } from "@/lib/desk";
 import {
   dashboardCounts,
   displayedOpportunities,
   getTenderDetail,
-  listSearchRuns,
   listTenders,
-  searchActivity,
   tendersClosingThisWeek,
   type TenderListItem,
 } from "@/lib/tenders/queries";
@@ -37,14 +35,14 @@ export default async function DashboardPage({
     has: readParam(params.has),
     view: readParam(params.view) || "overview",
   };
-  const [company, tenders, runs, activity] = await Promise.all([getCompany(), listTenders(), listSearchRuns(6), searchActivity()]);
+  const [company, tenders, desk] = await Promise.all([getCompany(), listTenders(), getDeskSnapshot()]);
   const counts = dashboardCounts(tenders);
   const changed = tenders.filter((item) => item.changed).length;
   const closing = tendersClosingThisWeek(tenders);
   const filtered = filterTenders(tenders, query, new Set(closing.map((item) => item.id)));
   const shown = displayedOpportunities(sortTenders(filtered, query.sort || "rank"));
   const detail = query.tender ? await getTenderDetail(query.tender) : null;
-  const relevant = counts.bid + counts.review;
+  const session = desk.session;
 
   return (
     <div className="space-y-3">
@@ -60,20 +58,13 @@ export default async function DashboardPage({
       />
       <div className="grid items-stretch gap-3 xl:grid-cols-3">
         <CompanyDnaPanel company={company} />
-        <DiscoveryPanel
-          liveSearch={serpApiKeyPresent()}
-          executed={activity.executed}
-          searchedGoogle={activity.searchedGoogle}
-          searchedNews={activity.searchedNews}
-          hasCandidates={tenders.length > 0}
-          runs={runs}
-        />
+        <DiscoveryPanel liveSearch={desk.liveSearch} historicalSearches={desk.historicalSearches} session={session} />
         <ResultsPanel
           query={query}
           items={shown}
-          raw={activity.rawResults}
-          unique={counts.total}
-          relevant={relevant}
+          raw={session?.rawCount ?? 0}
+          unique={session?.uniqueCount ?? 0}
+          relevant={session?.relevantCount ?? 0}
           counts={{
             all: applyHas(applyQuery(tenders, query.q || ""), query.has || "").length,
             best: applyHas(applyQuery(tenders, query.q || ""), query.has || "").filter((item) => item.verdict === "BID").length,
@@ -113,7 +104,7 @@ function ResultsPanel({
     <section className="flex h-full min-h-0 flex-col rounded-md border border-border bg-card p-3">
       <SectionHeading n={3} title="Discovery Results" />
       <p className="mt-1 text-[11px] text-muted-foreground">
-        {raw} raw results · {unique} unique opportunities · {relevant} relevant matches
+        Latest discovery: {raw} raw · {unique} unique · {relevant} relevant
       </p>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1 overflow-x-auto">

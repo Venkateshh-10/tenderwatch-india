@@ -1,6 +1,6 @@
 # Architecture
 
-TenderWatch is a Next.js App Router application. SQLite stores company profiles, search runs, sources, tenders, requirements, readiness evaluations, and watchlist items through Prisma.
+TenderWatch is a Next.js App Router application. SQLite stores company profiles, discovery sessions, search runs, sources, tenders, requirements, readiness evaluations, and watchlist items through Prisma. The database file is the absolute `prisma/dev.db` under the project root, shared by every route. `?tender=` only selects which notice is open. Live search is ready only when the server holds `SERPAPI_API_KEY`.
 
 ```text
 Company DNA

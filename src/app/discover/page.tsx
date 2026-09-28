@@ -1,17 +1,18 @@
 import { DiscoverRunner } from "@/components/discover-runner";
 import { TenderCard } from "@/components/tender-card";
+import { getDeskSnapshot } from "@/lib/desk";
 import { formatIst, formatSearchParameters } from "@/lib/format";
-import { serpApiKeyPresent } from "@/lib/mode";
-import { displayedOpportunities, latestLiveRetrieval, listSearchRuns, listTenders } from "@/lib/tenders/queries";
+import { displayedOpportunities, listSearchRuns, listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DiscoverPage() {
-  const [tenders, runs, lastVerified] = await Promise.all([listTenders(), listSearchRuns(40), latestLiveRetrieval()]);
+  const [tenders, runs, desk] = await Promise.all([listTenders(), listSearchRuns(40), getDeskSnapshot()]);
   const shown = displayedOpportunities(tenders);
+  const lastVerified = desk.lastVerified;
   return (
     <div className="space-y-3">
-      <DiscoverRunner liveSearch={serpApiKeyPresent()} />
+      <DiscoverRunner liveSearch={desk.liveSearch} />
       <section className="space-y-2">
         <h2 className="text-base font-semibold">Stored live notices</h2>
         {lastVerified ? <p className="text-[12px] text-muted-foreground">Showing last verified live result. Retrieved: {formatIst(lastVerified)}</p> : null}
@@ -19,6 +20,7 @@ export default async function DiscoverPage() {
       </section>
       <section id="queries" className="rounded-md border border-border bg-card p-3">
         <h2 className="text-base font-semibold">Search provenance</h2>
+        <p className="mt-1 text-[12px] text-muted-foreground">Historical: {desk.historicalSearches} searches stored</p>
         {runs.length === 0 ? (
           <p className="mt-2 text-[13px] text-muted-foreground">No searches stored yet.</p>
         ) : (

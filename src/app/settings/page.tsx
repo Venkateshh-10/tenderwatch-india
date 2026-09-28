@@ -1,17 +1,12 @@
+import { getDeskSnapshot } from "@/lib/desk";
 import { formatIst } from "@/lib/format";
-import { serpApiKeyPresent } from "@/lib/mode";
-import { countWatchlist, latestLiveRetrieval, listTenders, searchActivity } from "@/lib/tenders/queries";
+import { listTenders } from "@/lib/tenders/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [activity, lastVerified, tenders, watchCount] = await Promise.all([
-    searchActivity(),
-    latestLiveRetrieval(),
-    listTenders(),
-    countWatchlist(),
-  ]);
-  const live = serpApiKeyPresent();
+  const [desk, tenders] = await Promise.all([getDeskSnapshot(), listTenders()]);
+  const live = desk.liveSearch;
 
   return (
     <div className="mx-auto max-w-3xl space-y-3">
@@ -24,11 +19,13 @@ export default async function SettingsPage() {
       <section className="rounded-md border border-border bg-card p-3 text-[13px]">
         <dl className="grid gap-2 sm:grid-cols-2">
           <Item label="Live Search" value={live ? "Ready" : "Unavailable"} />
-          <Item label="Searches stored" value={String(activity.executed)} />
-          <Item label="Raw results stored" value={String(activity.rawResults)} />
+          <Item label="Latest discovery raw" value={String(desk.session?.rawCount ?? 0)} />
+          <Item label="Latest discovery queries" value={String(desk.session?.queryCount ?? 0)} />
+          <Item label="Historical searches stored" value={String(desk.historicalSearches)} />
+          <Item label="Historical raw results" value={String(desk.historicalRaw)} />
           <Item label="Tender candidates" value={String(tenders.length)} />
-          <Item label="Watchlist" value={String(watchCount)} />
-          <Item label="Last retrieval" value={lastVerified ? formatIst(lastVerified) : "No verified retrieval yet"} />
+          <Item label="Watchlist" value={String(desk.watchCount)} />
+          <Item label="Last retrieval" value={desk.lastVerified ? formatIst(desk.lastVerified) : "No verified retrieval yet"} />
         </dl>
         {live ? null : (
           <p className="mt-3 text-[12px] text-[#F59E0B]">Set SERPAPI_API_KEY in .env.local to run a live search. The desk stays empty until a real result is stored.</p>

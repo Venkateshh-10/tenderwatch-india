@@ -1,4 +1,5 @@
 import { SEARCH_TIMEOUT_MS } from "@/lib/search/limits";
+import { serverEnv } from "@/lib/server-env";
 import { SerpApiError } from "@/lib/serpapi/types";
 
 const ENDPOINT = "https://serpapi.com/search.json";
@@ -11,7 +12,7 @@ function sanitizeMessage(message: string): string {
 }
 
 export async function serpapiSearch(params: Record<string, string>, timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
-  const key = process.env.SERPAPI_API_KEY?.trim();
+  const key = serverEnv("SERPAPI_API_KEY");
   if (!key) {
     throw new SerpApiError("SERPAPI_API_KEY is not configured on the server.", "missing_key");
   }

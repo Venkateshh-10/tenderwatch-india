@@ -28,7 +28,37 @@ export function verificationLabel(status: string | null | undefined): string {
   return "SOURCE NOT VERIFIED";
 }
 
-export async function fetchPublicExcerpt(url: string): Promise<PublicFetchResult> {
+export function isGemFamilyHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^www\./, "");
+  return host === "gem.gov.in" || host.endsWith(".gem.gov.in");
+}
+
+export function gemDocumentHref(html: string, base: string): string | null {
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(base);
+  } catch {
+    return null;
+  }
+  const candidates: string[] = [];
+  for (const match of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) candidates.push(match[1] ?? "");
+  for (const match of html.matchAll(/https?:\/\/[^\s"'<>]+/gi)) candidates.push(match[0]);
+  for (const raw of candidates) {
+    if (!raw) continue;
+    let next: URL;
+    try {
+      next = new URL(raw, baseUrl);
+    } catch {
+      continue;
+    }
+    if (next.protocol !== "https:" || !isGemFamilyHost(next.hostname)) continue;
+    const path = `${next.pathname}${next.search}`;
+    if (/showbidDocument\/\d+/i.test(path) || /\.pdf(?:$|\?)/i.test(path)) return next.toString();
+  }
+  return null;
+}
+
+export async function fetchPublicExcerpt(url: string, depth = 0): Promise<PublicFetchResult> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -60,7 +90,7 @@ export async function fetchPublicExcerpt(url: string): Promise<PublicFetchResult
         current = next;
         continue;
       }
-      return await readResponse(current, response, redirectUrl);
+      return await readResponse(current, response, redirectUrl, depth);
     }
     return failed(current, failureVerification(current), "SOURCE NOT DIRECTLY VERIFIED", null, redirectUrl);
   } catch {
@@ -70,7 +100,7 @@ export async function fetchPublicExcerpt(url: string): Promise<PublicFetchResult
   }
 }
 
-async function readResponse(url: URL, response: Response, redirectUrl: string | null): Promise<PublicFetchResult> {
+async function readResponse(url: URL, response: Response, redirectUrl: string | null, depth: number): Promise<PublicFetchResult> {
   const contentType = response.headers.get("content-type");
   const disposition = response.headers.get("content-disposition") ?? "";
   const declared = Number(response.headers.get("content-length") ?? "");
@@ -105,6 +135,24 @@ async function readResponse(url: URL, response: Response, redirectUrl: string | 
   }
   if (type.includes("html") || type.startsWith("text/") || type === "") {
     const html = bytes.toString("utf8").slice(0, 350_000);
+    if (isGemFamilyHost(url.hostname)) {
+      if (depth === 0) {
+        const href = gemDocumentHref(html, url.toString());
+        if (href && href !== url.toString()) {
+          const followed = await fetchPublicExcerpt(href, 1);
+          if (isVerifiedFetch(followed.verification) && followed.excerpt) return followed;
+        }
+      }
+      return done(url, {
+        excerpt: null,
+        note: "Official GeM page was found. The bid document was not read.",
+        verification: "DISCOVERED_OFFICIAL",
+        httpStatus: response.status,
+        contentType,
+        redirectUrl,
+        contentLength: bytes.length,
+      });
+    }
     if (/captcha|access denied|forbidden/i.test(html.slice(0, 1500)) && html.length < 4000) {
       return failed(url, failureVerification(url), "SOURCE NOT DIRECTLY VERIFIED", response.status, redirectUrl, contentType, bytes.length);
     }

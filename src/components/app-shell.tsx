@@ -137,7 +137,7 @@ function SidebarBody({
           <p className={cn("mt-1 text-[11px]", liveSearch ? "text-[#22C55E]" : "text-[#F59E0B]")}>
             {liveSearch ? "Live search ready" : "Live search unavailable"}
           </p>
-          <p className="mt-1 text-[10px] text-muted-foreground">{searchCount} searches stored</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">Historical: {searchCount} searches stored</p>
           <p className="text-[10px] text-muted-foreground">{lastVerified ? `Last retrieval ${lastVerified}` : "No verified retrieval yet"}</p>
         </div>
       </div>

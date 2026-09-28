@@ -7,7 +7,7 @@ import { istDateKey } from "@/lib/tender/dates";
 import { verifiedDisplayTitle } from "@/lib/tender/display-title";
 import { clusterEvidenceText } from "@/lib/tender/evidence-text";
 import { extractFacts } from "@/lib/tender/extract";
-import { isVerifiedFetch, verificationLabel } from "@/lib/tender/fetch-source";
+import { gemDocumentHref, isVerifiedFetch, verificationLabel } from "@/lib/tender/fetch-source";
 import { extractPdfText } from "@/lib/tender/pdf-text";
 
 const GEM_TEXT = `[[page:1]]
@@ -170,6 +170,14 @@ describe("source verification and active discovery", () => {
 });
 
 describe("PDF text", () => {
+  it("follows a GeM bid document link out of a listing page", () => {
+    const href = gemDocumentHref(
+      `<a href="/showbidDocument/8779546">बड संख्या/Bid Number</a>`,
+      "https://bidplus.gem.gov.in/all-bids",
+    );
+    expect(href).toBe("https://bidplus.gem.gov.in/showbidDocument/8779546");
+  });
+
   it("reads a bid number from a PDF", async () => {
     const extracted = await extractPdfText(minimalPdf("Bid Number: GEM/2025/B/7058481 Estimated Bid Value 3198973"));
     expect(extracted?.text).toMatch(/GEM\/2025\/B\/7058481/);

@@ -34,22 +34,42 @@ model CompanyProfile {
   updatedAt                 DateTime @updatedAt
 }
 
+model DiscoverySession {
+  id             String    @id @default(cuid())
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  rawCount       Int       @default(0)
+  candidateCount Int       @default(0)
+  rejectedCount  Int       @default(0)
+  newsCount      Int       @default(0)
+  uniqueCount    Int       @default(0)
+  relevantCount  Int       @default(0)
+  queryCount     Int       @default(0)
+  dataMode       String    @default("live")
+  runs           SearchRun[]
+
+  @@index([startedAt])
+}
+
 model SearchRun {
-  id          String   @id @default(cuid())
+  id          String            @id @default(cuid())
   engine      String
   query       String
   parameters  String
-  executedAt  DateTime @default(now())
-  resultCount Int      @default(0)
+  executedAt  DateTime          @default(now())
+  resultCount Int               @default(0)
   status      String
   error       String?
-  cacheHit    Boolean  @default(false)
+  cacheHit    Boolean           @default(false)
   purpose     String
-  dataMode    String   @default("live")
+  dataMode    String            @default("live")
   retrievedAt DateTime
+  sessionId   String?
+  session     DiscoverySession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   sources     Source[]
 
   @@index([executedAt])
+  @@index([sessionId])
 }
 
 model Source {
